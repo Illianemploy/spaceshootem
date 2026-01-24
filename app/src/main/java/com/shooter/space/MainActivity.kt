@@ -1587,9 +1587,12 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                 drawBullet(bullet)
             }
 
-            // Draw enemy bullets (Phase 2)
-            gameEngine.enemyBulletsRef.forEach { bullet ->
-                drawEnemyBullet(bullet)
+            // Draw enemy bullets (Phase 2) - indexed loop, no iterator
+            val enemyBulletsList = gameEngine.enemyBulletsRef
+            var ebIdx = 0
+            while (ebIdx < enemyBulletsList.size) {
+                drawEnemyBullet(enemyBulletsList[ebIdx])
+                ebIdx++
             }
 
             // Draw power-ups (read from stable reference, NO copy)
@@ -1606,7 +1609,14 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
 
             // Draw player (read from stable reference, NO copy)
             if (gameState.isAlive) {
-                drawPlayer(gameEngine.playerRef, playerSprite)
+                // Phase 2B: Flash player during invulnerability frames
+                val alpha = if (gameState.playerInvulnMs > 0) {
+                    // 50ms on/off cycle (20Hz blink rate)
+                    if ((gameState.playerInvulnMs / 50) % 2 == 0L) 1.0f else 0.3f
+                } else {
+                    1.0f
+                }
+                drawPlayer(gameEngine.playerRef, playerSprite, alpha)
             }
 
             // Record draw time and increment frame counter (allocation-free)
@@ -1999,7 +2009,7 @@ fun ShopOverlay(
 }
 
 // Draw player spaceship using sprite sheet
-fun DrawScope.drawPlayer(player: Player, spriteSheet: ImageBitmap) {
+fun DrawScope.drawPlayer(player: Player, spriteSheet: ImageBitmap, alpha: Float = 1.0f) {
     val centerX = player.x
     val centerY = player.y
     val size = player.size
@@ -2032,13 +2042,14 @@ fun DrawScope.drawPlayer(player: Player, spriteSheet: ImageBitmap) {
     val destOffset = IntOffset((centerX - size / 2).toInt(), (centerY - size / 2).toInt())
     val destSize = IntSize(size.toInt(), size.toInt())
 
-    // Draw the sprite frame
+    // Draw the sprite frame with alpha modulation (Phase 2B: i-frame flash)
     drawImage(
         image = spriteSheet,
         srcOffset = srcOffset,
         srcSize = srcSize,
         dstOffset = destOffset,
-        dstSize = destSize
+        dstSize = destSize,
+        alpha = alpha
     )
 }
 

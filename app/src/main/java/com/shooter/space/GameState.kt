@@ -18,6 +18,7 @@ data class GameState(
     val playerHealth: Int,
     val maxPlayerHealth: Int,
     val isAlive: Boolean,
+    val playerInvulnMs: Long,  // Player invulnerability timer (Phase 2B visual feedback)
 
     // === TIMING ===
     val gameTime: Float, // Total elapsed time (for compatibility)
@@ -70,6 +71,7 @@ data class GameState(
                 playerHealth = 3,
                 maxPlayerHealth = 3,
                 isAlive = true,
+                playerInvulnMs = 0L,
                 gameTime = 0f,
                 survivedMilliseconds = 0L,
                 isShopOpen = false,
