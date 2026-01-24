@@ -39,6 +39,12 @@ class GameEngine(
     private val stars = mutableListOf<Star>()
     private var spaceCenter: SpaceCenter? = null
 
+    // Damage popups - fixed-size pool (allocation-free hot path)
+    private val DAMAGE_POPUP_CAP = 64
+    private val DAMAGE_POPUP_LIFETIME_MS = 600L
+    private val damagePopups = Array(DAMAGE_POPUP_CAP) { DamagePopup(0f, 0f, 0, 0L, 0) }
+    private var damagePopupHead = 0
+
     // === PUBLIC STABLE REFERENCES (for rendering, NO per-frame copy) ===
     // UI reads these directly to avoid allocation. Mutable, but rendering is read-only.
     val playerRef: Player get() = player
@@ -48,6 +54,7 @@ class GameEngine(
     val starsRef: List<Star> get() = stars
     val spaceCenterRef: SpaceCenter? get() = spaceCenter
     val powerUpsRef: List<WorldPowerUp> get() = powerUpSystem.worldPowerUps
+    val damagePopupsRef: Array<DamagePopup> get() = damagePopups
 
     // Game metrics
     private var score = 0
@@ -252,6 +259,9 @@ class GameEngine(
 
         // Check player-enemy collisions (contact damage)
         checkPlayerEnemyCollisions()
+
+        // Update damage popups (visual-only, no gameplay impact)
+        updateDamagePopups(dtMs)
 
         // Award score and currency based on survival time
         awardScoreAndCurrency(currentTime)
@@ -712,6 +722,21 @@ class GameEngine(
         }
     }
 
+    private fun updateDamagePopups(dtMs: Long) {
+        var i = 0
+        while (i < DAMAGE_POPUP_CAP) {
+            val p = damagePopups[i]
+            val rem = p.remainingMs
+            if (rem > 0L) {
+                val next = rem - dtMs
+                p.remainingMs = if (next > 0L) next else 0L
+                // drift up (simple, deterministic, no trig)
+                p.y -= (0.05f * dtMs.toFloat())
+            }
+            i++
+        }
+    }
+
     private fun checkBulletEnemyCollisions() {
         // Use reverse index loops to avoid allocation-heavy Set<> patterns
         // Use squared distance to avoid sqrt() in hot loop
@@ -862,9 +887,12 @@ class GameEngine(
         }
 
         // Apply SHIELD damage reduction if active
-        val shieldMultiplier = powerUpSystem.getShieldDamageMultiplier()
-        var damageToApply = (amount * shieldMultiplier).toInt()
-        if (damageToApply < 1) damageToApply = 1  // Minimum 1 damage (keep game non-trivial)
+        var damageToApply = amount
+        if (amount > 0 && powerUpSystem.hasEffect(PowerUpType.SHIELD)) {
+            val shieldMultiplier = powerUpSystem.getShieldDamageMultiplier()
+            damageToApply = (amount * shieldMultiplier).toInt()
+            if (damageToApply < 1) damageToApply = 1  // Minimum 1 damage (keep game non-trivial)
+        }
 
         // Apply damage
         playerHealth = (playerHealth - damageToApply).coerceAtLeast(0)
@@ -878,7 +906,7 @@ class GameEngine(
         }
 
         if (BuildConfig.DEBUG) {
-            val shieldInfo = if (shieldMultiplier < 1.0f) " (shield: ${amount}→${damageToApply})" else ""
+            val shieldInfo = if (damageToApply != amount) " (shield: ${amount}→${damageToApply})" else ""
             android.util.Log.d("Combat", "Player hit by $source for $damageToApply damage$shieldInfo (HP: $playerHealth/$maxPlayerHealth)")
         }
 
@@ -890,6 +918,17 @@ class GameEngine(
      * Handles death logic exactly once.
      * @return true if damage was applied, false if blocked
      */
+    private fun spawnDamagePopup(x: Float, y: Float, value: Int, style: Int = 0) {
+        val p = damagePopups[damagePopupHead]
+        p.x = x
+        p.y = y
+        p.value = value
+        p.remainingMs = DAMAGE_POPUP_LIFETIME_MS
+        p.style = style
+        damagePopupHead++
+        if (damagePopupHead >= DAMAGE_POPUP_CAP) damagePopupHead = 0
+    }
+
     private fun applyDamageToEnemy(
         enemy: Enemy,
         amount: Int,
@@ -919,6 +958,9 @@ class GameEngine(
                 android.util.Log.d("Combat", "Enemy killed by $source (HP: 0/${combat.maxHp})")
             }
         }
+
+        // Spawn damage popup at hit location
+        spawnDamagePopup(enemy.x, enemy.y - enemy.size * 0.2f, amount, style = 0)
 
         return true  // Damage applied
     }
