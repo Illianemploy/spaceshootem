@@ -129,6 +129,19 @@ data class EnemyBullet(
     val radius: Float
 )
 
+/**
+ * Damage popup entity (floating damage numbers).
+ * Primitives only, fixed-size pool, no allocations during update.
+ * Unused slots have remainingMs == 0.
+ */
+data class DamagePopup(
+    var x: Float,
+    var y: Float,
+    var value: Int,
+    var remainingMs: Long,
+    var style: Int // reserved for later (crit/element), default 0
+)
+
 // ============================================================================
 // ENEMY VISUAL SYSTEM - Configuration & Tuning
 // ============================================================================
@@ -1519,6 +1532,26 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
         }
     }
 
+    // Cached Paint objects for damage popups (allocation-free rendering)
+    val dmgPaintFill = remember {
+        android.graphics.Paint().apply {
+            color = android.graphics.Color.WHITE
+            textSize = 36f
+            textAlign = android.graphics.Paint.Align.CENTER
+            isAntiAlias = true
+        }
+    }
+    val dmgPaintStroke = remember {
+        android.graphics.Paint().apply {
+            color = android.graphics.Color.BLACK
+            textSize = 36f
+            textAlign = android.graphics.Paint.Align.CENTER
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 3f
+            isAntiAlias = true
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Canvas(
             modifier = Modifier
@@ -1605,6 +1638,24 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
             // Draw enemies (read from stable reference, NO copy)
             gameEngine.enemiesRef.forEach { enemy ->
                 drawEnemy(enemy, enemyRenderer)
+            }
+
+            // Draw damage popups (allocation-free: indexed while loop, cached Paint)
+            drawIntoCanvas { canvas ->
+                val nativeCanvas = canvas.nativeCanvas
+                val arr = gameEngine.damagePopupsRef
+                var i = 0
+                while (i < arr.size) {
+                    val p = arr[i]
+                    if (p.remainingMs > 0L) {
+                        val text = p.value.toString()
+                        // Draw stroke (outline) first for visibility
+                        nativeCanvas.drawText(text, p.x, p.y, dmgPaintStroke)
+                        // Draw fill on top
+                        nativeCanvas.drawText(text, p.x, p.y, dmgPaintFill)
+                    }
+                    i++
+                }
             }
 
             // Draw player (read from stable reference, NO copy)
