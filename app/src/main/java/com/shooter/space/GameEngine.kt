@@ -100,6 +100,9 @@ class GameEngine(
     private var lastDifficultyUpdate = 0L
     private var cachedSpawnInterval = 1000L
 
+    // Enemy bullet cap (Phase 2)
+    private val MAX_ENEMY_BULLETS = 200
+
     // Shop constants
     private val shopRespawnSeconds = 30
 
@@ -244,11 +247,11 @@ class GameEngine(
         // Check bullet-enemy collisions
         checkBulletEnemyCollisions()
 
-        // Check player-enemy collisions
-        checkPlayerEnemyCollisions()
-
         // Check enemy bullet-player collisions (Phase 2)
         checkEnemyBulletPlayerCollisions(currentTime)
+
+        // Check player-enemy collisions (contact damage)
+        checkPlayerEnemyCollisions()
 
         // Award score and currency based on survival time
         awardScoreAndCurrency(currentTime)
@@ -625,8 +628,8 @@ class GameEngine(
             // Enemy shooting logic (Phase 2)
             enemy.shootCooldownMs = (enemy.shootCooldownMs - dtMs).coerceAtLeast(0L)
 
-            if (enemy.shootCooldownMs == 0L && enemy.y >= 0f && enemy.y <= screenHeight) {
-                // Spawn enemy bullet
+            if (enemy.shootCooldownMs == 0L && enemy.y >= 0f && enemy.y <= screenHeight && enemyBullets.size < MAX_ENEMY_BULLETS) {
+                // Spawn enemy bullet (respects cap)
                 val bulletSpeed = 12f
                 val bulletDamage = 1
                 val bulletRadius = 6f
@@ -845,6 +848,7 @@ class GameEngine(
 
     /**
      * Apply damage to player with invulnerability frame support.
+     * Supports SHIELD power-up damage reduction (Phase 2B).
      * @return true if damage was applied, false if blocked by i-frames
      */
     private fun applyDamageToPlayer(
@@ -857,8 +861,13 @@ class GameEngine(
             return false  // Damage blocked by i-frames
         }
 
+        // Apply SHIELD damage reduction if active
+        val shieldMultiplier = powerUpSystem.getShieldDamageMultiplier()
+        var damageToApply = (amount * shieldMultiplier).toInt()
+        if (damageToApply < 1) damageToApply = 1  // Minimum 1 damage (keep game non-trivial)
+
         // Apply damage
-        playerHealth = (playerHealth - amount).coerceAtLeast(0)
+        playerHealth = (playerHealth - damageToApply).coerceAtLeast(0)
 
         // Set invulnerability frames
         playerInvulnMs = PLAYER_IFRAMES_MS
@@ -869,7 +878,8 @@ class GameEngine(
         }
 
         if (BuildConfig.DEBUG) {
-            android.util.Log.d("Combat", "Player hit by $source for $amount damage (HP: $playerHealth/$maxPlayerHealth)")
+            val shieldInfo = if (shieldMultiplier < 1.0f) " (shield: ${amount}→${damageToApply})" else ""
+            android.util.Log.d("Combat", "Player hit by $source for $damageToApply damage$shieldInfo (HP: $playerHealth/$maxPlayerHealth)")
         }
 
         return true  // Damage applied
@@ -983,6 +993,7 @@ class GameEngine(
             playerHealth = playerHealth,
             maxPlayerHealth = maxPlayerHealth,
             isAlive = isAlive,
+            playerInvulnMs = playerInvulnMs,
             gameTime = gameTime,
             survivedMilliseconds = survivedMilliseconds,
             isShopOpen = isShopOpen,
