@@ -49,6 +49,8 @@ class GameEngine(
 
     // Game metrics
     private var score = 0
+    private var survivalScore = 0  // Score from surviving (time-based)
+    private var killScore = 0       // Score from kills (combat-based)
     private var earnedCurrency = 0
     private var currentMultiplier = 1.0
     private var playerHealth = 3
@@ -427,12 +429,15 @@ class GameEngine(
 
     private fun updateStars(dtMs: Long) {
         val speedScale = dtMs / 16f // Scale speed relative to 16ms baseline
-        for (star in stars) {
+        var i = 0
+        while (i < stars.size) {
+            val star = stars[i]
             star.y += star.speed * speedScale
             if (star.y > screenHeight) {
                 star.y = 0f
                 star.x = Random.nextInt(0, screenWidth.toInt() + 1).toFloat()
             }
+            i++
         }
     }
 
@@ -443,20 +448,16 @@ class GameEngine(
         if (currentTime - lastFireTime > effectiveFireRate) {
             val bulletSpeed = 20f * (1f + playerUpgrades.bulletSpeedLevel * 0.3f)
 
-            // Get active modifiers from power-ups
-            val modifiers = mutableListOf(WeaponModifier(id = "base"))
-            powerUpSystem.activeEffects[PowerUpType.MULTISHOT]?.let {
-                modifiers.add(WeaponModifier(id = "multishot", projectileCount = 3, spreadAngle = 15f))
-            }
-            powerUpSystem.activeEffects[PowerUpType.FIREPOWER]?.let {
-                modifiers.add(WeaponModifier(id = "firepower", isPiercing = true))
+            // Compute projectile count without allocating lists
+            val projectileCount = if (powerUpSystem.activeEffects.containsKey(PowerUpType.MULTISHOT)) {
+                3  // Multishot gives 3 bullets
+            } else {
+                1  // Base single bullet
             }
 
-            // Fire bullets based on modifiers
-            val projectileCount = modifiers.maxOfOrNull { it.projectileCount } ?: 1
-            val spreadAngle = modifiers.maxOfOrNull { it.spreadAngle } ?: 0f
-
-            for (i in 0 until projectileCount) {
+            // Fire bullets
+            var i = 0
+            while (i < projectileCount) {
                 val offsetX = if (projectileCount > 1) {
                     (i - projectileCount / 2) * 20f
                 } else 0f
@@ -468,6 +469,7 @@ class GameEngine(
                         speed = bulletSpeed
                     )
                 )
+                i++
             }
 
             lastFireTime = currentTime
@@ -574,18 +576,21 @@ class GameEngine(
     private fun updateEnemies(dtMs: Long) {
         val dtSec = dtMs / 1000f
 
-        for (enemy in enemies) {
+        var i = 0
+        while (i < enemies.size) {
+            val enemy = enemies[i]
             enemy.timeAlive += dtSec
             enemy.rotation += 1f * (dtMs / 16f) // Scale rotation by delta time
 
-            // Update behavior controller
+            // Update behavior controller with correct combat health
+            val c = enemy.combat
             enemy.behaviorController?.update(
                 enemy = enemy,
                 playerX = player.x,
                 playerY = player.y,
                 deltaTime = dtSec,
-                health = enemy.health,
-                maxHealth = enemy.health
+                health = c.hp,
+                maxHealth = c.maxHp
             )
 
             // Apply behavior movement
@@ -599,21 +604,22 @@ class GameEngine(
 
             val speedScale = dtMs / 16f // Scale speed relative to 16ms baseline
             enemy.y += enemy.speed * speedMultiplier * speedScale
+            i++
         }
 
         // Remove off-screen enemies (reverse loop for performance)
-        var i = enemies.size - 1
-        while (i >= 0) {
-            if (enemies[i].y > screenHeight + enemies[i].size) {
-                enemies.removeAt(i)
+        var j = enemies.size - 1
+        while (j >= 0) {
+            if (enemies[j].y > screenHeight + enemies[j].size) {
+                enemies.removeAt(j)
             }
-            i--
+            j--
         }
     }
 
     private fun checkBulletEnemyCollisions() {
         // Use reverse index loops to avoid allocation-heavy Set<> patterns
-        // Mark bullets/enemies as dead, then sweep in a second pass
+        // Use squared distance to avoid sqrt() in hot loop
 
         var bulletIdx = bullets.size - 1
         while (bulletIdx >= 0) {
@@ -626,9 +632,10 @@ class GameEngine(
 
                 val dx = bullet.x - enemy.x
                 val dy = bullet.y - enemy.y
-                val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+                val distSq = dx * dx + dy * dy
+                val radiusSq = (enemy.size / 2) * (enemy.size / 2)
 
-                if (distance < enemy.size / 2) {
+                if (distSq < radiusSq) {
                     // Apply damage via combat system
                     applyDamageToEnemy(enemy, 1, DamageSource.PLAYER_BULLET)
 
@@ -637,7 +644,7 @@ class GameEngine(
                     bulletHit = true
 
                     // Remove enemy if dead
-                    if (enemy.combat?.hp == 0 || enemy.health <= 0) {
+                    if (enemy.combat.hp == 0) {
                         enemies.removeAt(enemyIdx)
                     }
 
@@ -657,17 +664,20 @@ class GameEngine(
         val currentTime = System.currentTimeMillis()
 
         // Use reverse index loop to allow safe removal during iteration
+        // Use squared distance to avoid sqrt() in hot loop
         var i = enemies.size - 1
         while (i >= 0) {
             val enemy = enemies[i]
 
             val dx = player.x - enemy.x
             val dy = player.y - enemy.y
-            val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+            val distSq = dx * dx + dy * dy
+            val collisionRadius = (player.size + enemy.size) / 2
+            val radiusSq = collisionRadius * collisionRadius
 
-            if (distance < (player.size + enemy.size) / 2) {
+            if (distSq < radiusSq) {
                 // Get contact damage from enemy's combat stats
-                val contactDamage = enemy.combat?.contactDamage ?: 1
+                val contactDamage = enemy.combat.contactDamage
 
                 // Apply damage to player via combat system (respects i-frames)
                 val damageApplied = applyDamageToPlayer(contactDamage, DamageSource.CONTACT, currentTime)
@@ -700,11 +710,13 @@ class GameEngine(
         }
 
         // Enemy invulnerability timers (tick down CombatStats)
-        for (i in 0 until enemies.size) {  // Indexed loop, no iterator allocation
+        var i = 0
+        while (i < enemies.size) {
             val combat = enemies[i].combat
-            if (combat != null && combat.invulnRemainingMs > 0) {
+            if (combat.invulnRemainingMs > 0) {
                 combat.invulnRemainingMs = (combat.invulnRemainingMs - deltaMs).coerceAtLeast(0L)
             }
+            i++
         }
     }
 
@@ -751,23 +763,14 @@ class GameEngine(
         source: DamageSource
     ): Boolean {
         val combat = enemy.combat
-        if (combat == null) {
-            // Fallback: use legacy health system if combat not initialized
-            enemy.health = (enemy.health - amount).coerceAtLeast(0)
-
-            if (enemy.health <= 0) {
-                score += 10  // Award score on kill
-                if (BuildConfig.DEBUG) {
-                    android.util.Log.d("Combat", "Enemy killed by $source (legacy health)")
-                }
-            }
-            return true
-        }
 
         // Check invulnerability (enemies have minimal or no i-frames by default)
         if (combat.invulnRemainingMs > 0) {
             return false  // Damage blocked
         }
+
+        // Track if this will be a kill (hp transition to 0)
+        val wasAlive = combat.hp > 0
 
         // Apply damage
         combat.hp = (combat.hp - amount).coerceAtLeast(0)
@@ -775,9 +778,9 @@ class GameEngine(
         // Sync legacy health field for compatibility
         enemy.health = combat.hp
 
-        // Handle death exactly once
-        if (combat.hp <= 0) {
-            score += 10  // Award score on kill
+        // Award kill score exactly once (only on hp transition to 0)
+        if (wasAlive && combat.hp == 0) {
+            killScore += 10
 
             if (BuildConfig.DEBUG) {
                 android.util.Log.d("Combat", "Enemy killed by $source (HP: 0/${combat.maxHp})")
@@ -788,9 +791,9 @@ class GameEngine(
     }
 
     private fun awardScoreAndCurrency(currentTime: Long) {
-        // Score: 1 point per 100ms
-        val survivalScore = (survivedMilliseconds / 100).toInt()
-        score = survivalScore
+        // Score: 1 point per 100ms (survival) + kill bonuses
+        survivalScore = (survivedMilliseconds / 100).toInt()
+        score = survivalScore + killScore  // Combine survival + kill scores
 
         // Currency: 1 $M per second
         val baseCurrency = survivedMilliseconds / 1000

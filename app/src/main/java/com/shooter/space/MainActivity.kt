@@ -109,7 +109,7 @@ data class Enemy(
     var behaviorController: EnemyBehaviorController? = null,
     val sizeTier: SizeTier = SizeTier.MEDIUM,
     val visualStyle: EnemyVisualStyle = EnemyVisualStyle.SHAPE_CIRCLE,
-    var combat: CombatStats? = null  // Combat component, initialized at spawn
+    var combat: CombatStats = CombatStats(hp = 1, maxHp = 1, contactDamage = 1, invulnRemainingMs = 0L)
 )
 
 data class Player(var x: Float, var y: Float, val size: Float = 60f, var velocityX: Float = 0f, var velocityY: Float = 0f)
