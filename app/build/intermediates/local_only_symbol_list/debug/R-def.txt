@@ -1,0 +1,12 @@
+R_DEF: Internal format may change without notice
+local
+drawable asteroids
+drawable asteroids_0001
+drawable bonuses_0001
+drawable evil_enemy_spaceship_001
+drawable parallax_background_001
+drawable parallax_background_002
+drawable player_ship
+drawable space_center02
+mipmap ic_launcher
+string app_name

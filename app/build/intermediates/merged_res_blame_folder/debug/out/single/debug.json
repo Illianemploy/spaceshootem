@@ -1,0 +1,38 @@
+[
+    {
+        "merged": "com.shooter.space.app-merged_res-41:/drawable_evil_enemy_spaceship_001.png.flat",
+        "source": "com.shooter.space.app-main-43:/drawable/evil_enemy_spaceship_001.png"
+    },
+    {
+        "merged": "com.shooter.space.app-merged_res-41:/drawable_parallax_background_002.png.flat",
+        "source": "com.shooter.space.app-main-43:/drawable/parallax_background_002.png"
+    },
+    {
+        "merged": "com.shooter.space.app-merged_res-41:/drawable_bonuses_0001.png.flat",
+        "source": "com.shooter.space.app-main-43:/drawable/bonuses_0001.png"
+    },
+    {
+        "merged": "com.shooter.space.app-merged_res-41:/drawable_player_ship.png.flat",
+        "source": "com.shooter.space.app-main-43:/drawable/player_ship.png"
+    },
+    {
+        "merged": "com.shooter.space.app-merged_res-41:/drawable_parallax_background_001.png.flat",
+        "source": "com.shooter.space.app-main-43:/drawable/parallax_background_001.png"
+    },
+    {
+        "merged": "com.shooter.space.app-merged_res-41:/mipmap-hdpi_ic_launcher.xml.flat",
+        "source": "com.shooter.space.app-main-43:/mipmap-hdpi/ic_launcher.xml"
+    },
+    {
+        "merged": "com.shooter.space.app-merged_res-41:/drawable_asteroids.png.flat",
+        "source": "com.shooter.space.app-main-43:/drawable/asteroids.png"
+    },
+    {
+        "merged": "com.shooter.space.app-merged_res-41:/drawable_asteroids_0001.png.flat",
+        "source": "com.shooter.space.app-main-43:/drawable/asteroids_0001.png"
+    },
+    {
+        "merged": "com.shooter.space.app-merged_res-41:/drawable_space_center02.png.flat",
+        "source": "com.shooter.space.app-main-43:/drawable/space_center02.png"
+    }
+]
