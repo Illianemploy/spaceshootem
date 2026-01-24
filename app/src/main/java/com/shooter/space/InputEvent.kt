@@ -35,4 +35,12 @@ sealed class InputEvent {
      * Debug events
      */
     data object DebugToggle : InputEvent()
+
+    /**
+     * Debug stress testing controls (debug builds only)
+     */
+    sealed class DebugStress : InputEvent() {
+        data class SetSpawnMultiplier(val multiplier: Int) : DebugStress()
+        data class TriggerBurst(val count: Int) : DebugStress()
+    }
 }
