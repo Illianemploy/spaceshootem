@@ -862,9 +862,12 @@ class GameEngine(
         }
 
         // Apply SHIELD damage reduction if active
-        val shieldMultiplier = powerUpSystem.getShieldDamageMultiplier()
-        var damageToApply = (amount * shieldMultiplier).toInt()
-        if (damageToApply < 1) damageToApply = 1  // Minimum 1 damage (keep game non-trivial)
+        var damageToApply = amount
+        if (amount > 0 && powerUpSystem.hasEffect(PowerUpType.SHIELD)) {
+            val shieldMultiplier = powerUpSystem.getShieldDamageMultiplier()
+            damageToApply = (amount * shieldMultiplier).toInt()
+            if (damageToApply < 1) damageToApply = 1  // Minimum 1 damage (keep game non-trivial)
+        }
 
         // Apply damage
         playerHealth = (playerHealth - damageToApply).coerceAtLeast(0)
@@ -878,7 +881,7 @@ class GameEngine(
         }
 
         if (BuildConfig.DEBUG) {
-            val shieldInfo = if (shieldMultiplier < 1.0f) " (shield: ${amount}→${damageToApply})" else ""
+            val shieldInfo = if (damageToApply != amount) " (shield: ${amount}→${damageToApply})" else ""
             android.util.Log.d("Combat", "Player hit by $source for $damageToApply damage$shieldInfo (HP: $playerHealth/$maxPlayerHealth)")
         }
 
