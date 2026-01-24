@@ -488,6 +488,16 @@ class RollingStats(private val capacity: Int) {
 
     fun avg(): Float = if (count == 0) 0f else sum / count
 
+    // Allocation-free max computation over existing buffer
+    fun max(): Float {
+        if (count == 0) return 0f
+        var maxVal = buf[0]
+        for (i in 1 until count) {  // Indexed loop, no iterator allocation
+            if (buf[i] > maxVal) maxVal = buf[i]
+        }
+        return maxVal
+    }
+
     fun reset() {
         idx = 0
         count = 0
@@ -1371,7 +1381,7 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
     val updateStats = remember { RollingStats(60) }
     val drawStats = remember { RollingStats(60) }
     var framesDrawnThisSecond by remember { mutableIntStateOf(0) }
-    var lastSecondFrameCount by remember { mutableIntStateOf(0) }
+    var lastCompletedSecondFrames by remember { mutableIntStateOf(0) }
 
     // Game loop - vsync-driven with withFrameNanos, continuous frame requests
     LaunchedEffect(gameState.isAlive) {
@@ -1403,14 +1413,22 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                     val currentTime = System.currentTimeMillis()
                     if (currentTime - lastDebugUpdate >= 1000) {
                         val avgFrameMs = frameStats.avg()
-                        val drawnFps = lastSecondFrameCount
+                        val worstFrameMs = frameStats.max()
+                        val avgUpdateMs = updateStats.avg()
+                        val avgDrawMs = drawStats.avg()
+                        val lastSecondFrames = lastCompletedSecondFrames
+
+                        // Calculate % of 16.67ms budget (60 Hz target)
+                        val targetFrameMs = 16.67f
+                        val updatePercent = if (targetFrameMs > 0f) (avgUpdateMs / targetFrameMs * 100f) else 0f
+                        val drawPercent = if (targetFrameMs > 0f) (avgDrawMs / targetFrameMs * 100f) else 0f
 
                         debugMetrics = debugMetrics.copy(
                             fps = if (avgFrameMs > 0f) (1000f / avgFrameMs).toInt() else 0,
                             avgFrameTime = avgFrameMs,
-                            worstFrameTime = avgFrameMs,  // Simplified: worst is tracked separately if needed
-                            updateMs = updateStats.avg(),
-                            drawMs = drawStats.avg(),
+                            worstFrameTime = worstFrameMs,
+                            updateMs = avgUpdateMs,
+                            drawMs = avgDrawMs,
                             enemyCount = gameEngine.enemiesRef.size,
                             bulletCount = gameEngine.bulletsRef.size,
                             spawnInterval = gameEngine.getSpawnInterval(),  // Get real spawn interval
@@ -1423,14 +1441,18 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                             bgOffset = 0f
                         )
 
+                        // Get debug config for stress test status
+                        val debugCfg = gameEngine.getDebugConfig()
+                        val stressStatus = if (debugCfg.enabled) " [STRESS: ${debugCfg.spawnMultiplier}x]" else ""
+
                         // Cache formatted debug strings once per second (NO per-frame formatting)
                         cachedDebugLines = listOf(
                             "DEBUG OVERLAY",
-                            "FPS: ${debugMetrics.fps} (drawn: $drawnFps)",
-                            "Frame: ${String.format("%.1f", debugMetrics.avgFrameTime)}ms",
-                            "Update: ${String.format("%.2f", debugMetrics.updateMs)}ms",
-                            "Draw: ${String.format("%.2f", debugMetrics.drawMs)}ms",
-                            "Enemies: ${debugMetrics.enemyCount}",
+                            "FPS: ${debugMetrics.fps} (last sec: $lastSecondFrames frames)",
+                            "Frame: ${String.format("%.1f", debugMetrics.avgFrameTime)}ms (worst: ${String.format("%.1f", debugMetrics.worstFrameTime)}ms)",
+                            "Update: ${String.format("%.2f", debugMetrics.updateMs)}ms (${String.format("%.0f", updatePercent)}% of budget)",
+                            "Draw: ${String.format("%.2f", debugMetrics.drawMs)}ms (${String.format("%.0f", drawPercent)}% of budget)",
+                            "Enemies: ${debugMetrics.enemyCount}$stressStatus",
                             "Bullets: ${debugMetrics.bulletCount}",
                             "Spawn Interval: ${debugMetrics.spawnInterval}ms",
                             "Difficulty: Lvl ${debugMetrics.difficultyLevel}",
@@ -1440,7 +1462,7 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                         )
 
                         lastDebugUpdate = currentTime
-                        lastSecondFrameCount = framesDrawnThisSecond
+                        lastCompletedSecondFrames = framesDrawnThisSecond
                         framesDrawnThisSecond = 0
                     }
                 }
@@ -1688,6 +1710,90 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                     .align(Alignment.TopEnd)
                     .padding(8.dp)
             )
+
+            // Debug stress test controls (bottom-right)
+            val debugConfig = gameEngine.getDebugConfig()
+            Card(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xCC000000)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "STRESS TEST",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFFFAA00)
+                    )
+
+                    // Spawn multiplier control
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(
+                            onClick = {
+                                // Cycle through 1, 2, 5, 10
+                                val nextMultiplier = when (debugConfig.spawnMultiplier) {
+                                    1 -> 2
+                                    2 -> 5
+                                    5 -> 10
+                                    else -> 1
+                                }
+                                gameEngine.handleDebugStress(
+                                    InputEvent.DebugStress.SetSpawnMultiplier(nextMultiplier)
+                                )
+                            },
+                            modifier = Modifier.height(40.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (debugConfig.enabled) Color(0xFFFF6600) else Color(0xFF444444)
+                            )
+                        ) {
+                            Text(
+                                text = "Spawn: ${debugConfig.spawnMultiplier}x",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    // Burst spawn control
+                    Button(
+                        onClick = {
+                            gameEngine.handleDebugStress(
+                                InputEvent.DebugStress.TriggerBurst(25)
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(40.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFFF0000)
+                        )
+                    ) {
+                        Text(
+                            text = "+25 BURST",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    if (debugConfig.enabled) {
+                        Text(
+                            text = "⚠ STRESS MODE ACTIVE",
+                            fontSize = 10.sp,
+                            color = Color(0xFFFF6600),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
         }
     }
 }
