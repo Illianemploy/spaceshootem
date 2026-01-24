@@ -35,6 +35,7 @@ class GameEngine(
     private var player = Player(screenWidth / 2, screenHeight - 150f)
     private val enemies = mutableListOf<Enemy>()
     private val bullets = mutableListOf<Bullet>()
+    private val enemyBullets = mutableListOf<EnemyBullet>()
     private val stars = mutableListOf<Star>()
     private var spaceCenter: SpaceCenter? = null
 
@@ -43,6 +44,7 @@ class GameEngine(
     val playerRef: Player get() = player
     val enemiesRef: List<Enemy> get() = enemies
     val bulletsRef: List<Bullet> get() = bullets
+    val enemyBulletsRef: List<EnemyBullet> get() = enemyBullets
     val starsRef: List<Star> get() = stars
     val spaceCenterRef: SpaceCenter? get() = spaceCenter
     val powerUpsRef: List<WorldPowerUp> get() = powerUpSystem.worldPowerUps
@@ -236,11 +238,17 @@ class GameEngine(
         // Update enemies
         updateEnemies(dtMs)
 
+        // Update enemy bullets (Phase 2)
+        updateEnemyBullets(dtMs)
+
         // Check bullet-enemy collisions
         checkBulletEnemyCollisions()
 
         // Check player-enemy collisions
         checkPlayerEnemyCollisions()
+
+        // Check enemy bullet-player collisions (Phase 2)
+        checkEnemyBulletPlayerCollisions(currentTime)
 
         // Award score and currency based on survival time
         awardScoreAndCurrency(currentTime)
@@ -503,13 +511,21 @@ class GameEngine(
 
         val baseHealth = difficultyScaler.getEnemyHealth()
         val health = if (sizeTier == SizeTier.ELITE) baseHealth + 1 else baseHealth
+        val enemyType = Random.nextInt(0, 5)
+
+        // Initialize shoot cooldown based on enemy type
+        val initialCooldown = if (enemyType <= 2) {
+            Random.nextLong(900L, 1401L)  // type 0-2: slower firing
+        } else {
+            Random.nextLong(600L, 1101L)  // type 3-4: faster firing
+        }
 
         val enemy = Enemy(
             x = randFloat(size, screenWidth - size),
             y = -size,
             size = size,
             speed = 3f * difficultyScaler.getSpeedMultiplier(),
-            type = Random.nextInt(0, 5),
+            type = enemyType,
             timeAlive = 0f,
             rotation = 0f,
             health = health,
@@ -521,7 +537,8 @@ class GameEngine(
                 maxHp = health,
                 contactDamage = 1,  // Standard contact damage
                 invulnRemainingMs = 0L
-            )
+            ),
+            shootCooldownMs = initialCooldown
         )
 
         enemies.add(enemy)
@@ -604,6 +621,62 @@ class GameEngine(
 
             val speedScale = dtMs / 16f // Scale speed relative to 16ms baseline
             enemy.y += enemy.speed * speedMultiplier * speedScale
+
+            // Enemy shooting logic (Phase 2)
+            enemy.shootCooldownMs = (enemy.shootCooldownMs - dtMs).coerceAtLeast(0L)
+
+            if (enemy.shootCooldownMs == 0L && enemy.y >= 0f && enemy.y <= screenHeight) {
+                // Spawn enemy bullet
+                val bulletSpeed = 12f
+                val bulletDamage = 1
+                val bulletRadius = 6f
+                val spawnX = enemy.x
+                val spawnY = enemy.y + enemy.size * 0.5f
+
+                val vx: Float
+                val vy: Float
+
+                if (enemy.type <= 2) {
+                    // STRAIGHT_DOWN
+                    vx = 0f
+                    vy = bulletSpeed
+                } else {
+                    // AIM_AT_PLAYER
+                    val dx = player.x - spawnX
+                    val dy = player.y - spawnY
+                    val dist = kotlin.math.sqrt(dx * dx + dy * dy)
+                    if (dist > 0f) {
+                        vx = (dx / dist) * bulletSpeed
+                        vy = (dy / dist) * bulletSpeed
+                    } else {
+                        vx = 0f
+                        vy = bulletSpeed
+                    }
+                }
+
+                enemyBullets.add(
+                    EnemyBullet(
+                        x = spawnX,
+                        y = spawnY,
+                        vx = vx,
+                        vy = vy,
+                        damage = bulletDamage,
+                        radius = bulletRadius
+                    )
+                )
+
+                // Reset cooldown
+                enemy.shootCooldownMs = if (enemy.type <= 2) {
+                    Random.nextLong(900L, 1401L)
+                } else {
+                    Random.nextLong(600L, 1101L)
+                }
+
+                if (BuildConfig.DEBUG) {
+                    android.util.Log.d("Combat", "Enemy type ${enemy.type} fired bullet at (${spawnX.toInt()}, ${spawnY.toInt()})")
+                }
+            }
+
             i++
         }
 
@@ -614,6 +687,25 @@ class GameEngine(
                 enemies.removeAt(j)
             }
             j--
+        }
+    }
+
+    private fun updateEnemyBullets(dtMs: Long) {
+        val speedScale = dtMs / 16f
+
+        // Update positions and remove off-screen bullets
+        var i = enemyBullets.size - 1
+        while (i >= 0) {
+            val bullet = enemyBullets[i]
+            bullet.x += bullet.vx * speedScale
+            bullet.y += bullet.vy * speedScale
+
+            val margin = 50f
+            if (bullet.y > screenHeight + margin || bullet.y < -margin ||
+                bullet.x < -margin || bullet.x > screenWidth + margin) {
+                enemyBullets.removeAt(i)
+            }
+            i--
         }
     }
 
@@ -688,6 +780,37 @@ class GameEngine(
                 // Only break if damage was applied (prevents multi-hit during i-frames)
                 if (damageApplied) {
                     break
+                }
+            }
+
+            i--
+        }
+    }
+
+    private fun checkEnemyBulletPlayerCollisions(nowMs: Long) {
+        // Use reverse index loop for safe removal
+        // Use squared distance to avoid sqrt() in hot loop
+        val playerRadius = player.size * 0.5f
+
+        var i = enemyBullets.size - 1
+        while (i >= 0) {
+            val bullet = enemyBullets[i]
+
+            val dx = player.x - bullet.x
+            val dy = player.y - bullet.y
+            val distSq = dx * dx + dy * dy
+            val collisionRadius = playerRadius + bullet.radius
+            val radiusSq = collisionRadius * collisionRadius
+
+            if (distSq < radiusSq) {
+                // Apply damage to player (respects i-frames)
+                val damageApplied = applyDamageToPlayer(bullet.damage, DamageSource.ENEMY_BULLET, nowMs)
+
+                // Remove bullet regardless of i-frames result (bullet consumed on contact)
+                enemyBullets.removeAt(i)
+
+                if (BuildConfig.DEBUG && damageApplied) {
+                    android.util.Log.d("Combat", "Player hit by enemy bullet for ${bullet.damage} damage")
                 }
             }
 

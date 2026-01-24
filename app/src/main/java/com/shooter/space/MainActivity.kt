@@ -109,11 +109,25 @@ data class Enemy(
     var behaviorController: EnemyBehaviorController? = null,
     val sizeTier: SizeTier = SizeTier.MEDIUM,
     val visualStyle: EnemyVisualStyle = EnemyVisualStyle.SHAPE_CIRCLE,
-    var combat: CombatStats = CombatStats(hp = 1, maxHp = 1, contactDamage = 1, invulnRemainingMs = 0L)
+    var combat: CombatStats = CombatStats(hp = 1, maxHp = 1, contactDamage = 1, invulnRemainingMs = 0L),
+    var shootCooldownMs: Long = 0L  // Enemy shooting cooldown timer
 )
 
 data class Player(var x: Float, var y: Float, val size: Float = 60f, var velocityX: Float = 0f, var velocityY: Float = 0f)
 data class Bullet(val x: Float, var y: Float, val speed: Float = 20f)
+
+/**
+ * Enemy bullet entity (Phase 2 combat).
+ * Primitives only, no allocations during update.
+ */
+data class EnemyBullet(
+    var x: Float,
+    var y: Float,
+    var vx: Float,
+    var vy: Float,
+    val damage: Int,
+    val radius: Float
+)
 
 // ============================================================================
 // ENEMY VISUAL SYSTEM - Configuration & Tuning
@@ -1573,6 +1587,11 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                 drawBullet(bullet)
             }
 
+            // Draw enemy bullets (Phase 2)
+            gameEngine.enemyBulletsRef.forEach { bullet ->
+                drawEnemyBullet(bullet)
+            }
+
             // Draw power-ups (read from stable reference, NO copy)
             gameEngine.powerUpsRef.forEach { powerUp ->
                 if (powerUp.alive) {
@@ -2028,6 +2047,18 @@ fun DrawScope.drawBullet(bullet: Bullet) {
     drawCircle(
         color = Color.Cyan,
         radius = 4f,
+        center = Offset(bullet.x, bullet.y)
+    )
+}
+
+/**
+ * Draw enemy bullet (Phase 2).
+ * Different color from player bullets for visual distinction.
+ */
+fun DrawScope.drawEnemyBullet(bullet: EnemyBullet) {
+    drawCircle(
+        color = Color(0xFFFF4444),  // Red
+        radius = bullet.radius,
         center = Offset(bullet.x, bullet.y)
     )
 }
