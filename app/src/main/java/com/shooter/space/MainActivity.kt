@@ -1488,7 +1488,7 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                 }
         ) {
             // Read frameTick to ensure Canvas redraws continuously (even when idle)
-            val _ = frameTick
+            frameTick  // Read value to trigger recomposition
 
             // Measure draw time (allocation-free: System.nanoTime() only)
             val drawStartNanos = if (BuildConfig.DEBUG && debugOverlayEnabled) System.nanoTime() else 0L
@@ -1589,7 +1589,7 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
         }
 
         // Interaction prompt when near space center
-        if (gameState.playerInsideShop && !gameState.isShopOpen && gameState.spaceCenter != null) {
+        if (gameState.playerInsideShop && !gameState.isShopOpen && gameEngine.spaceCenterRef != null) {
             Card(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
