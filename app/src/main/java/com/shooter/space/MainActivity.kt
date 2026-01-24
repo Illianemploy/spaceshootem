@@ -57,6 +57,35 @@ enum class SizeTier {
     ELITE    // 130-160px
 }
 
+// ============================================================================
+// COMBAT SYSTEM - Phase 1
+// ============================================================================
+
+/**
+ * Defines the source of damage for combat tracking and logic branching.
+ */
+enum class DamageSource {
+    PLAYER_BULLET,
+    ENEMY_BULLET,
+    CONTACT,
+    AOE
+}
+
+/**
+ * Lightweight mutable combat component.
+ * Created once at spawn/init, NO allocations during update loops.
+ */
+data class CombatStats(
+    var hp: Int,
+    val maxHp: Int,
+    var contactDamage: Int = 0,
+    var invulnRemainingMs: Long = 0L
+)
+
+// ============================================================================
+// ENEMY VISUAL SYSTEM
+// ============================================================================
+
 // Enemy visual styles (procedural shapes + sprites)
 enum class EnemyVisualStyle {
     SHAPE_TRIANGLE,
@@ -79,7 +108,8 @@ data class Enemy(
     val maxHealth: Int = 1,
     var behaviorController: EnemyBehaviorController? = null,
     val sizeTier: SizeTier = SizeTier.MEDIUM,
-    val visualStyle: EnemyVisualStyle = EnemyVisualStyle.SHAPE_CIRCLE
+    val visualStyle: EnemyVisualStyle = EnemyVisualStyle.SHAPE_CIRCLE,
+    var combat: CombatStats? = null  // Combat component, initialized at spawn
 )
 
 data class Player(var x: Float, var y: Float, val size: Float = 60f, var velocityX: Float = 0f, var velocityY: Float = 0f)

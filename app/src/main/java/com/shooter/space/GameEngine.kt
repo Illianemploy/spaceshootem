@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
+import com.shooter.space.BuildConfig
 import kotlin.math.ln
 import kotlin.math.min
 import kotlin.math.pow
@@ -98,6 +99,12 @@ class GameEngine(
     // Shop constants
     private val shopRespawnSeconds = 30
 
+    // Combat constants (Phase 1)
+    private val PLAYER_IFRAMES_MS = 300L  // Player invulnerability duration
+
+    // Combat state
+    private var playerInvulnMs = 0L  // Player invulnerability timer
+
     // === PUBLISHED STATE (primitives only, NO entity copying) ===
     val state = mutableStateOf(
         GameState.initial(powerUpSprite, spaceCenterSprite)
@@ -169,6 +176,9 @@ class GameEngine(
 
         // Update star parallax
         updateStars(dtMs)
+
+        // Tick combat timers (invulnerability, etc.)
+        tickCombatTimers(dtMs)
 
         // Apply player velocity decay (frame-independent)
         val decayFactor = 0.85.pow((dtMs / 16.0)).toFloat()
@@ -503,7 +513,13 @@ class GameEngine(
             health = health,
             sizeTier = sizeTier,
             behaviorController = EnemyBehaviorController(),
-            visualStyle = randomVisualStyle()
+            visualStyle = randomVisualStyle(),
+            combat = CombatStats(
+                hp = health,
+                maxHp = health,
+                contactDamage = 1,  // Standard contact damage
+                invulnRemainingMs = 0L
+            )
         )
 
         enemies.add(enemy)
@@ -596,47 +612,179 @@ class GameEngine(
     }
 
     private fun checkBulletEnemyCollisions() {
-        val bulletsToRemove = mutableSetOf<Bullet>()
-        val enemiesToRemove = mutableSetOf<Enemy>()
+        // Use reverse index loops to avoid allocation-heavy Set<> patterns
+        // Mark bullets/enemies as dead, then sweep in a second pass
 
-        for (bullet in bullets) {
-            for (enemy in enemies) {
+        var bulletIdx = bullets.size - 1
+        while (bulletIdx >= 0) {
+            val bullet = bullets[bulletIdx]
+            var bulletHit = false
+
+            var enemyIdx = enemies.size - 1
+            while (enemyIdx >= 0) {
+                val enemy = enemies[enemyIdx]
+
                 val dx = bullet.x - enemy.x
                 val dy = bullet.y - enemy.y
                 val distance = kotlin.math.sqrt(dx * dx + dy * dy)
 
                 if (distance < enemy.size / 2) {
-                    enemy.health -= 1
-                    if (enemy.health <= 0) {
-                        enemiesToRemove.add(enemy)
-                        score += 10
+                    // Apply damage via combat system
+                    applyDamageToEnemy(enemy, 1, DamageSource.PLAYER_BULLET)
+
+                    // Remove bullet (already hit)
+                    bullets.removeAt(bulletIdx)
+                    bulletHit = true
+
+                    // Remove enemy if dead
+                    if (enemy.combat?.hp == 0 || enemy.health <= 0) {
+                        enemies.removeAt(enemyIdx)
                     }
-                    bulletsToRemove.add(bullet)
-                    break
+
+                    break  // Bullet can only hit one enemy
                 }
+
+                enemyIdx--
+            }
+
+            if (!bulletHit) {
+                bulletIdx--
             }
         }
-
-        bullets.removeAll(bulletsToRemove)
-        enemies.removeAll(enemiesToRemove)
     }
 
     private fun checkPlayerEnemyCollisions() {
-        for (enemy in enemies) {
+        val currentTime = System.currentTimeMillis()
+
+        // Use reverse index loop to allow safe removal during iteration
+        var i = enemies.size - 1
+        while (i >= 0) {
+            val enemy = enemies[i]
+
             val dx = player.x - enemy.x
             val dy = player.y - enemy.y
             val distance = kotlin.math.sqrt(dx * dx + dy * dy)
 
             if (distance < (player.size + enemy.size) / 2) {
-                playerHealth -= 1
-                enemies.remove(enemy)
+                // Get contact damage from enemy's combat stats
+                val contactDamage = enemy.combat?.contactDamage ?: 1
 
-                if (playerHealth <= 0) {
-                    isAlive = false
+                // Apply damage to player via combat system (respects i-frames)
+                val damageApplied = applyDamageToPlayer(contactDamage, DamageSource.CONTACT, currentTime)
+
+                // Remove enemy on contact (regardless of i-frames)
+                enemies.removeAt(i)
+
+                // Only break if damage was applied (prevents multi-hit during i-frames)
+                if (damageApplied) {
+                    break
                 }
-                break
+            }
+
+            i--
+        }
+    }
+
+    // ============================================================================
+    // COMBAT SYSTEM (Phase 1)
+    // ============================================================================
+
+    /**
+     * Tick down combat timers (invulnerability, etc.).
+     * Called once per frame, NO allocations.
+     */
+    private fun tickCombatTimers(deltaMs: Long) {
+        // Player invulnerability timer
+        if (playerInvulnMs > 0) {
+            playerInvulnMs = (playerInvulnMs - deltaMs).coerceAtLeast(0L)
+        }
+
+        // Enemy invulnerability timers (tick down CombatStats)
+        for (i in 0 until enemies.size) {  // Indexed loop, no iterator allocation
+            val combat = enemies[i].combat
+            if (combat != null && combat.invulnRemainingMs > 0) {
+                combat.invulnRemainingMs = (combat.invulnRemainingMs - deltaMs).coerceAtLeast(0L)
             }
         }
+    }
+
+    /**
+     * Apply damage to player with invulnerability frame support.
+     * @return true if damage was applied, false if blocked by i-frames
+     */
+    private fun applyDamageToPlayer(
+        amount: Int,
+        source: DamageSource,
+        nowMs: Long
+    ): Boolean {
+        // Check invulnerability
+        if (playerInvulnMs > 0) {
+            return false  // Damage blocked by i-frames
+        }
+
+        // Apply damage
+        playerHealth = (playerHealth - amount).coerceAtLeast(0)
+
+        // Set invulnerability frames
+        playerInvulnMs = PLAYER_IFRAMES_MS
+
+        // Check death
+        if (playerHealth <= 0) {
+            isAlive = false
+        }
+
+        if (BuildConfig.DEBUG) {
+            android.util.Log.d("Combat", "Player hit by $source for $amount damage (HP: $playerHealth/$maxPlayerHealth)")
+        }
+
+        return true  // Damage applied
+    }
+
+    /**
+     * Apply damage to enemy with combat stats.
+     * Handles death logic exactly once.
+     * @return true if damage was applied, false if blocked
+     */
+    private fun applyDamageToEnemy(
+        enemy: Enemy,
+        amount: Int,
+        source: DamageSource
+    ): Boolean {
+        val combat = enemy.combat
+        if (combat == null) {
+            // Fallback: use legacy health system if combat not initialized
+            enemy.health = (enemy.health - amount).coerceAtLeast(0)
+
+            if (enemy.health <= 0) {
+                score += 10  // Award score on kill
+                if (BuildConfig.DEBUG) {
+                    android.util.Log.d("Combat", "Enemy killed by $source (legacy health)")
+                }
+            }
+            return true
+        }
+
+        // Check invulnerability (enemies have minimal or no i-frames by default)
+        if (combat.invulnRemainingMs > 0) {
+            return false  // Damage blocked
+        }
+
+        // Apply damage
+        combat.hp = (combat.hp - amount).coerceAtLeast(0)
+
+        // Sync legacy health field for compatibility
+        enemy.health = combat.hp
+
+        // Handle death exactly once
+        if (combat.hp <= 0) {
+            score += 10  // Award score on kill
+
+            if (BuildConfig.DEBUG) {
+                android.util.Log.d("Combat", "Enemy killed by $source (HP: 0/${combat.maxHp})")
+            }
+        }
+
+        return true  // Damage applied
     }
 
     private fun awardScoreAndCurrency(currentTime: Long) {
