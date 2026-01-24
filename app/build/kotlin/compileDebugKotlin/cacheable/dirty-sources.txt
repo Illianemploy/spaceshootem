@@ -1,4 +1,0 @@
-C:\Users\Max\Documents\GitHub\spaceshootem\app\src\main\java\com\shooter\space\GameState.kt
-C:\Users\Max\Documents\GitHub\spaceshootem\app\src\main\java\com\shooter\space\InputEvent.kt
-C:\Users\Max\Documents\GitHub\spaceshootem\app\src\main\java\com\shooter\space\GameEngine.kt
-C:\Users\Max\Documents\GitHub\spaceshootem\app\src\main\java\com\shooter\space\MainActivity.kt
