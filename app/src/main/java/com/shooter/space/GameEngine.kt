@@ -81,6 +81,9 @@ class GameEngine(
     private val difficultyScaler = DifficultyScaler()
     private val powerUpSystem = PowerUpSystem()
 
+    // Debug stress testing (primitives only, debug builds only)
+    private var debugConfig = DebugConfig()
+
     // Cached sprites
     private val powerUpSprite: ImageBitmap? = powerUpSprite
     private val spaceCenterSprite: ImageBitmap? = spaceCenterSprite
@@ -185,10 +188,25 @@ class GameEngine(
             lastDifficultyUpdate = currentTime
         }
 
-        // Spawn enemies
+        // Spawn enemies (with debug stress multiplier if enabled)
         if (currentTime - lastSpawnTime > cachedSpawnInterval) {
-            spawnEnemy()
+            val spawnCount = if (debugConfig.enabled) debugConfig.spawnMultiplier else 1
+            // Respect entity caps: spawn up to multiplier but don't exceed reasonable limits
+            val actualCount = min(spawnCount, 50 - enemies.size).coerceAtLeast(1)
+            for (spawnIdx in 0 until actualCount) {  // Indexed loop, no iterator
+                spawnEnemy()
+            }
             lastSpawnTime = currentTime
+        }
+
+        // Handle debug burst spawn (one-shot, then reset)
+        if (debugConfig.spawnBurst > 0) {
+            val burstCount = min(debugConfig.spawnBurst, 50 - enemies.size).coerceAtLeast(0)
+            for (burstIdx in 0 until burstCount) {  // Indexed loop, no iterator
+                spawnEnemy()
+            }
+            // Reset burst counter after consuming
+            debugConfig = debugConfig.copy(spawnBurst = 0)
         }
 
         // Spawn power-ups (test: every 10s)
@@ -710,4 +728,37 @@ class GameEngine(
             backgroundScrollOffset = 0f
         )
     }
+
+    /**
+     * Get debug config for UI display
+     */
+    fun getDebugConfig(): DebugConfig = debugConfig
+
+    /**
+     * Handle debug stress testing input events (debug builds only).
+     * Called at safe point at start of update().
+     */
+    fun handleDebugStress(event: InputEvent.DebugStress) {
+        when (event) {
+            is InputEvent.DebugStress.SetSpawnMultiplier -> {
+                debugConfig = debugConfig.copy(
+                    enabled = event.multiplier > 1,
+                    spawnMultiplier = event.multiplier
+                )
+            }
+            is InputEvent.DebugStress.TriggerBurst -> {
+                debugConfig = debugConfig.copy(spawnBurst = event.count)
+            }
+        }
+    }
 }
+
+/**
+ * Debug stress testing configuration (primitives only).
+ * Controls spawn rate multiplication and burst spawning for testing.
+ */
+data class DebugConfig(
+    val enabled: Boolean = false,
+    val spawnMultiplier: Int = 1,
+    val spawnBurst: Int = 0  // Consumed when > 0, then reset to 0
+)
