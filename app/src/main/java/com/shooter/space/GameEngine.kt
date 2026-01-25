@@ -795,8 +795,9 @@ class GameEngine(
 
         // Fire when timer expires
         if (boss.attackTimerMs <= 0) {
-            // Reset timer
-            boss.attackTimerMs = boss.attackCooldownMs
+            // Reset timer (preserve overshoot for stable cadence)
+            boss.attackTimerMs += boss.attackCooldownMs
+            if (boss.attackTimerMs <= 0L) boss.attackTimerMs = boss.attackCooldownMs
 
             // SPREAD pattern: spawn N bullets in evenly spaced angles around downward direction
             val bulletSpeed = 10f
