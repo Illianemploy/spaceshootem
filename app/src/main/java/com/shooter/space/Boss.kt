@@ -4,7 +4,7 @@ package com.shooter.space
  * Boss entity (Phase 3 framework).
  * Primitives only + FloatArray thresholds, no allocations during update.
  * Phase transitions triggered by HP thresholds.
- * Phase 4: Attack state (primitives only).
+ * Phase 4: Attack state (primitives only) + SPIRAL pattern support.
  */
 class Boss(
     var x: Float,
@@ -16,7 +16,10 @@ class Boss(
     // Phase 4: Attack state (primitives only)
     var attackCooldownMs: Long = 2000L,  // Time between attacks
     var attackTimerMs: Long = 0L,        // Countdown timer
-    var spreadCount: Int = 3             // Number of bullets in spread pattern (phase-dependent)
+    var spreadCount: Int = 3,            // Number of bullets in spread pattern (phase-dependent)
+    var patternType: Int = 0,            // 0=SPREAD, 1=SPIRAL
+    var spiralAngleDeg: Float = 0f,      // Current spiral angle accumulator
+    var spiralStepDeg: Float = 18f       // Angle increment per spiral shot
 ) {
     // Helper: check if boss is alive
     val isAlive: Boolean get() = combat.hp > 0

@@ -1618,6 +1618,9 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
     val bossHealthBarBgColor = remember { Color(0xFF400000) }  // Dark red
     val bossHealthBarFillColor = remember { Color(0xFFFF0000) }  // Bright red
 
+    // Telegraph paint (Phase 4 visual telegraphing - cached to avoid per-frame allocation)
+    val telegraphStroke = remember { Stroke(width = 2f) }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Canvas(
             modifier = Modifier
@@ -1781,6 +1784,22 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                         style = Stroke(width = 2f)
                     )
                 }
+            }
+
+            // Draw telegraphs (Phase 4 visual telegraphing - fixed pool, allocation-free)
+            val telegraphArr = gameEngine.telegraphsRef
+            var tIdx = 0
+            while (tIdx < telegraphArr.size) {
+                val t = telegraphArr[tIdx]
+                if (t.remainingMs > 0L) {
+                    drawCircle(
+                        color = Color.Yellow,
+                        radius = t.radius,
+                        center = Offset(t.x, t.y),
+                        style = telegraphStroke
+                    )
+                }
+                tIdx++
             }
 
             // Draw player (read from stable reference, NO copy)
