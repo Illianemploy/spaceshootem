@@ -1614,6 +1614,13 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
         }
     }
 
+    // Boss health bar colors (Phase 3 framework - hoisted to avoid per-frame allocation)
+    val bossHealthBarBgColor = remember { Color(0xFF400000) }  // Dark red
+    val bossHealthBarFillColor = remember { Color(0xFFFF0000) }  // Bright red
+
+    // Telegraph paint (Phase 4 visual telegraphing - cached to avoid per-frame allocation)
+    val telegraphStroke = remember { Stroke(width = 2f) }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Canvas(
             modifier = Modifier
@@ -1743,6 +1750,56 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                     }
                     i++
                 }
+            }
+
+            // Draw boss health bar (Phase 3 framework - uses cached colors)
+            gameEngine.bossRef?.let { boss ->
+                if (boss.isAlive) {
+                    val barWidth = screenWidth * 0.6f
+                    val barHeight = 20f
+                    val barX = (screenWidth - barWidth) / 2
+                    val barY = 50f
+
+                    // Background (dark red - cached)
+                    drawRect(
+                        color = bossHealthBarBgColor,
+                        topLeft = Offset(barX, barY),
+                        size = Size(barWidth, barHeight)
+                    )
+
+                    // Health fill (bright red - cached)
+                    val hpPercent = boss.combat.hp.toFloat() / boss.combat.maxHp.toFloat()
+                    val fillWidth = barWidth * hpPercent
+                    drawRect(
+                        color = bossHealthBarFillColor,
+                        topLeft = Offset(barX, barY),
+                        size = Size(fillWidth, barHeight)
+                    )
+
+                    // Border (white - static color, no allocation)
+                    drawRect(
+                        color = Color.White,
+                        topLeft = Offset(barX, barY),
+                        size = Size(barWidth, barHeight),
+                        style = Stroke(width = 2f)
+                    )
+                }
+            }
+
+            // Draw telegraphs (Phase 4 visual telegraphing - fixed pool, allocation-free)
+            val telegraphArr = gameEngine.telegraphsRef
+            var tIdx = 0
+            while (tIdx < telegraphArr.size) {
+                val t = telegraphArr[tIdx]
+                if (t.remainingMs > 0L) {
+                    drawCircle(
+                        color = Color.Yellow,
+                        radius = t.radius,
+                        center = Offset(t.x, t.y),
+                        style = telegraphStroke
+                    )
+                }
+                tIdx++
             }
 
             // Draw player (read from stable reference, NO copy)

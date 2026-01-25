@@ -38,12 +38,18 @@ class GameEngine(
     private val enemyBullets = mutableListOf<EnemyBullet>()
     private val stars = mutableListOf<Star>()
     private var spaceCenter: SpaceCenter? = null
+    private var boss: Boss? = null  // Phase 3: boss entity (nullable, spawned manually)
 
     // Damage popups - fixed-size pool (allocation-free hot path)
     private val DAMAGE_POPUP_CAP = 64
     private val DAMAGE_POPUP_LIFETIME_MS = 600L
     private val damagePopups = Array(DAMAGE_POPUP_CAP) { DamagePopup(0f, 0f, 0, 0L, 0, "") }
     private var damagePopupHead = 0
+
+    // Telegraphs - fixed-size pool (Phase 4 visual telegraphing, allocation-free hot path)
+    private val TELEGRAPH_CAP = 16
+    private val telegraphs = Array(TELEGRAPH_CAP) { Telegraph(0f, 0f, 0L, 0f, 0) }
+    private var telegraphHead = 0
 
     // === PUBLIC STABLE REFERENCES (for rendering, NO per-frame copy) ===
     // UI reads these directly to avoid allocation. Mutable, but rendering is read-only.
@@ -55,6 +61,8 @@ class GameEngine(
     val spaceCenterRef: SpaceCenter? get() = spaceCenter
     val powerUpsRef: List<WorldPowerUp> get() = powerUpSystem.worldPowerUps
     val damagePopupsRef: Array<DamagePopup> get() = damagePopups
+    val telegraphsRef: Array<Telegraph> get() = telegraphs  // Phase 4: telegraph stable reference
+    val bossRef: Boss? get() = boss  // Phase 3: boss stable reference
 
     // Game metrics
     private var score = 0
@@ -248,11 +256,17 @@ class GameEngine(
         // Update enemies
         updateEnemies(dtMs)
 
+        // Update boss (Phase 3)
+        updateBoss(dtMs)
+
         // Update enemy bullets (Phase 2)
         updateEnemyBullets(dtMs)
 
         // Check bullet-enemy collisions
         checkBulletEnemyCollisions()
+
+        // Check bullet-boss collisions (Phase 3)
+        checkBulletBossCollisions()
 
         // Check enemy bullet-player collisions (Phase 2)
         checkEnemyBulletPlayerCollisions(currentTime)
@@ -262,6 +276,9 @@ class GameEngine(
 
         // Update damage popups (visual-only, no gameplay impact)
         updateDamagePopups(dtMs)
+
+        // Update telegraphs (Phase 4 visual-only, no gameplay impact)
+        updateTelegraphs(dtMs)
 
         // Award score and currency based on survival time
         awardScoreAndCurrency(currentTime)
@@ -573,6 +590,24 @@ class GameEngine(
         )
     }
 
+    /**
+     * Spawn boss manually (Phase 3 framework).
+     * Simple spawn for now, no automatic triggering.
+     */
+    fun spawnBoss() {
+        if (boss != null) return  // Only one boss at a time
+
+        val maxHp = 100
+        boss = Boss(
+            x = screenWidth / 2,
+            y = screenHeight * 0.2f,
+            size = 120f,
+            combat = CombatStats(hp = maxHp, maxHp = maxHp, contactDamage = 2),
+            phaseIndex = 0,
+            phaseThresholds = floatArrayOf(0.75f, 0.5f, 0.25f)  // 3 phases at 75%, 50%, 25% HP
+        )
+    }
+
     private fun checkPowerUpCollisions() {
         val pickupRadius = 30f
 
@@ -703,6 +738,155 @@ class GameEngine(
         }
     }
 
+    /**
+     * Update boss (Phase 3 framework).
+     * Indexed while loops only, no allocations.
+     */
+    private fun updateBoss(dtMs: Long) {
+        val b = boss ?: return
+        if (!b.isAlive) return
+
+        // Update phase based on HP thresholds
+        updateBossPhase(b)
+
+        // Update boss attacks (Phase 4)
+        updateBossAttacks(b, dtMs)
+
+        // TODO: boss movement (Phase 3+ future)
+        // For now: boss stays in place
+    }
+
+    /**
+     * Update boss phase based on HP thresholds (Phase 3 framework).
+     * Uses indexed while loop, no allocations.
+     * Thresholds are in descending order (e.g., 0.75, 0.5, 0.25).
+     */
+    private fun updateBossPhase(boss: Boss) {
+        val hpPercent = boss.combat.hp.toFloat() / boss.combat.maxHp.toFloat()
+
+        // Find highest phase threshold we've crossed (indexed while loop)
+        var newPhase = boss.phaseIndex
+        var i = boss.phaseIndex
+        while (i < boss.phaseThresholds.size) {
+            if (hpPercent <= boss.phaseThresholds[i]) {
+                newPhase = i + 1  // Advance to next phase
+            }
+            i++
+        }
+
+        // Update phase index if changed
+        if (newPhase > boss.phaseIndex) {
+            boss.phaseIndex = newPhase
+            // Phase 4: Update attack parameters based on phase
+            boss.patternType = when (newPhase) {
+                1 -> 0   // Phase 1: SPREAD
+                else -> 1  // Phase 2+: SPIRAL
+            }
+            boss.spreadCount = when (newPhase) {
+                1 -> 3   // Phase 1: 3 bullets
+                2 -> 5   // Phase 2: 5 bullets
+                3 -> 7   // Phase 3: 7 bullets
+                else -> 3
+            }
+            boss.attackCooldownMs = when (newPhase) {
+                1 -> 2000L  // Phase 1: 2s cooldown
+                2 -> 800L   // Phase 2: 0.8s cooldown (faster for spiral)
+                3 -> 500L   // Phase 3: 0.5s cooldown (fastest)
+                else -> 2000L
+            }
+        }
+    }
+
+    /**
+     * Update boss attacks (Phase 4).
+     * Uses indexed while loop to spawn SPREAD pattern bullets.
+     * No temporary lists, no allocations.
+     */
+    private fun updateBossAttacks(boss: Boss, dtMs: Long) {
+        // Tick down attack timer
+        boss.attackTimerMs -= dtMs
+
+        // Spawn telegraph when timer crosses below 200ms (Phase 4 telegraphing)
+        val telegraphThreshold = 200L
+        if (boss.attackTimerMs > 0 && boss.attackTimerMs <= telegraphThreshold && boss.attackTimerMs + dtMs > telegraphThreshold) {
+            // Spawn telegraph once when crossing threshold
+            spawnTelegraph(boss.x, boss.y + boss.size * 0.5f, 30f, telegraphThreshold, style = 0)
+        }
+
+        // Fire when timer expires
+        if (boss.attackTimerMs <= 0) {
+            // Reset timer (preserve overshoot for stable cadence)
+            boss.attackTimerMs += boss.attackCooldownMs
+            if (boss.attackTimerMs <= 0L) boss.attackTimerMs = boss.attackCooldownMs
+
+            // Common parameters
+            val bulletSpeed = 10f
+            val bulletDamage = 1
+            val bulletRadius = 6f
+            val spawnX = boss.x
+            val spawnY = boss.y + boss.size * 0.5f
+
+            // Pattern selection based on patternType (0=SPREAD, 1=SPIRAL)
+            if (boss.patternType == 1) {
+                // SPIRAL pattern: spawn 1 bullet at current angle, increment angle
+                if (enemyBullets.size < MAX_ENEMY_BULLETS) {
+                    val angleRad = Math.toRadians(boss.spiralAngleDeg.toDouble() + 90.0)  // +90 for downward base
+                    val vx = (bulletSpeed * kotlin.math.cos(angleRad)).toFloat()
+                    val vy = (bulletSpeed * kotlin.math.sin(angleRad)).toFloat()
+
+                    enemyBullets.add(
+                        EnemyBullet(
+                            x = spawnX,
+                            y = spawnY,
+                            vx = vx,
+                            vy = vy,
+                            damage = bulletDamage,
+                            radius = bulletRadius
+                        )
+                    )
+
+                    // Increment spiral angle and wrap
+                    boss.spiralAngleDeg += boss.spiralStepDeg
+                    if (boss.spiralAngleDeg >= 360f) boss.spiralAngleDeg -= 360f
+                }
+            } else {
+                // SPREAD pattern: spawn N bullets in evenly spaced angles around downward direction
+                val spreadAngle = 60f  // Total spread arc in degrees (±30° from down)
+                val angleStep = if (boss.spreadCount > 1) {
+                    spreadAngle / (boss.spreadCount - 1)
+                } else {
+                    0f
+                }
+                val startAngle = -spreadAngle / 2  // Start from left side of spread
+
+                // Spawn bullets using indexed while loop (no allocations)
+                var i = 0
+                while (i < boss.spreadCount) {
+                    if (enemyBullets.size >= MAX_ENEMY_BULLETS) break  // Respect cap
+
+                    val angleDeg = startAngle + (angleStep * i)
+                    val angleRad = Math.toRadians(angleDeg.toDouble() + 90.0)  // +90 because 0° is right, we want down
+
+                    val vx = (bulletSpeed * kotlin.math.cos(angleRad)).toFloat()
+                    val vy = (bulletSpeed * kotlin.math.sin(angleRad)).toFloat()
+
+                    enemyBullets.add(
+                        EnemyBullet(
+                            x = spawnX,
+                            y = spawnY,
+                            vx = vx,
+                            vy = vy,
+                            damage = bulletDamage,
+                            radius = bulletRadius
+                        )
+                    )
+
+                    i++
+                }
+            }
+        }
+    }
+
     private fun updateEnemyBullets(dtMs: Long) {
         val speedScale = dtMs / 16f
 
@@ -732,6 +916,38 @@ class GameEngine(
                 p.remainingMs = if (next > 0L) next else 0L
                 // drift up (simple, deterministic, no trig)
                 p.y -= (0.05f * dtMs.toFloat())
+            }
+            i++
+        }
+    }
+
+    /**
+     * Spawn telegraph visual (Phase 4 telegraphing).
+     * Ring buffer with cap, allocation-free.
+     */
+    private fun spawnTelegraph(x: Float, y: Float, radius: Float, lifetimeMs: Long, style: Int = 0) {
+        val t = telegraphs[telegraphHead]
+        t.x = x
+        t.y = y
+        t.remainingMs = lifetimeMs
+        t.radius = radius
+        t.style = style
+        telegraphHead++
+        if (telegraphHead >= TELEGRAPH_CAP) telegraphHead = 0
+    }
+
+    /**
+     * Update telegraphs (Phase 4 telegraphing).
+     * Indexed while loop, no allocations.
+     */
+    private fun updateTelegraphs(dtMs: Long) {
+        var i = 0
+        while (i < TELEGRAPH_CAP) {
+            val t = telegraphs[i]
+            val rem = t.remainingMs
+            if (rem > 0L) {
+                val next = rem - dtMs
+                t.remainingMs = if (next > 0L) next else 0L
             }
             i++
         }
@@ -777,6 +993,43 @@ class GameEngine(
             if (!bulletHit) {
                 bulletIdx--
             }
+        }
+    }
+
+    /**
+     * Check bullet-boss collisions (Phase 3 framework).
+     * Reuses existing collision detection pattern.
+     */
+    private fun checkBulletBossCollisions() {
+        val b = boss ?: return
+        if (!b.isAlive) return
+
+        // Use reverse index loop, squared distance (no allocations, no sqrt)
+        var bulletIdx = bullets.size - 1
+        while (bulletIdx >= 0) {
+            val bullet = bullets[bulletIdx]
+
+            val dx = bullet.x - b.x
+            val dy = bullet.y - b.y
+            val distSq = dx * dx + dy * dy
+            val radiusSq = (b.size / 2) * (b.size / 2)
+
+            if (distSq < radiusSq) {
+                // Apply damage via combat system
+                applyDamageToBoss(b, 1, DamageSource.PLAYER_BULLET)
+
+                // Remove bullet (already hit)
+                bullets.removeAt(bulletIdx)
+
+                // Remove boss if dead
+                if (!b.isAlive) {
+                    boss = null
+                }
+
+                break  // Bullet can only hit boss once
+            }
+
+            bulletIdx--
         }
     }
 
@@ -975,6 +1228,44 @@ class GameEngine(
 
         // Spawn damage popup at hit location
         spawnDamagePopup(enemy.x, enemy.y - enemy.size * 0.2f, amount, style)
+
+        return true  // Damage applied
+    }
+
+    /**
+     * Apply damage to boss (Phase 3 framework).
+     * Reuses existing combat semantics: invuln check, hp clamp, kill transition once.
+     * Spawns damage popup with style=0 (normal).
+     */
+    private fun applyDamageToBoss(
+        boss: Boss,
+        amount: Int,
+        source: DamageSource
+    ): Boolean {
+        val combat = boss.combat
+
+        // Check invulnerability
+        if (combat.invulnRemainingMs > 0) {
+            return false  // Damage blocked
+        }
+
+        // Track if this will be a kill (hp transition to 0)
+        val wasAlive = combat.hp > 0
+
+        // Apply damage
+        combat.hp = (combat.hp - amount).coerceAtLeast(0)
+
+        // Award kill score exactly once (only on hp transition to 0)
+        if (wasAlive && combat.hp == 0) {
+            killScore += 100  // Boss kill is worth more
+
+            if (BuildConfig.DEBUG) {
+                android.util.Log.d("Combat", "Boss defeated by $source (HP: 0/${combat.maxHp})")
+            }
+        }
+
+        // Spawn damage popup at hit location (style=0 for now, no special boss styling)
+        spawnDamagePopup(boss.x, boss.y - boss.size * 0.2f, amount, style = 0)
 
         return true  // Damage applied
     }
