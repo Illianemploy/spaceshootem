@@ -38,6 +38,7 @@ class GameEngine(
     private val enemyBullets = mutableListOf<EnemyBullet>()
     private val stars = mutableListOf<Star>()
     private var spaceCenter: SpaceCenter? = null
+    private var boss: Boss? = null  // Phase 3: boss entity (nullable, spawned manually)
 
     // Damage popups - fixed-size pool (allocation-free hot path)
     private val DAMAGE_POPUP_CAP = 64
@@ -55,6 +56,7 @@ class GameEngine(
     val spaceCenterRef: SpaceCenter? get() = spaceCenter
     val powerUpsRef: List<WorldPowerUp> get() = powerUpSystem.worldPowerUps
     val damagePopupsRef: Array<DamagePopup> get() = damagePopups
+    val bossRef: Boss? get() = boss  // Phase 3: boss stable reference
 
     // Game metrics
     private var score = 0
@@ -248,11 +250,17 @@ class GameEngine(
         // Update enemies
         updateEnemies(dtMs)
 
+        // Update boss (Phase 3)
+        updateBoss(dtMs)
+
         // Update enemy bullets (Phase 2)
         updateEnemyBullets(dtMs)
 
         // Check bullet-enemy collisions
         checkBulletEnemyCollisions()
+
+        // Check bullet-boss collisions (Phase 3)
+        checkBulletBossCollisions()
 
         // Check enemy bullet-player collisions (Phase 2)
         checkEnemyBulletPlayerCollisions(currentTime)
@@ -573,6 +581,24 @@ class GameEngine(
         )
     }
 
+    /**
+     * Spawn boss manually (Phase 3 framework).
+     * Simple spawn for now, no automatic triggering.
+     */
+    fun spawnBoss() {
+        if (boss != null) return  // Only one boss at a time
+
+        val maxHp = 100
+        boss = Boss(
+            x = screenWidth / 2,
+            y = screenHeight * 0.2f,
+            size = 120f,
+            combat = CombatStats(hp = maxHp, maxHp = maxHp, contactDamage = 2),
+            phaseIndex = 0,
+            phaseThresholds = floatArrayOf(0.75f, 0.5f, 0.25f)  // 3 phases at 75%, 50%, 25% HP
+        )
+    }
+
     private fun checkPowerUpCollisions() {
         val pickupRadius = 30f
 
@@ -703,6 +729,45 @@ class GameEngine(
         }
     }
 
+    /**
+     * Update boss (Phase 3 framework).
+     * Indexed while loops only, no allocations.
+     */
+    private fun updateBoss(dtMs: Long) {
+        val b = boss ?: return
+        if (!b.isAlive) return
+
+        // Update phase based on HP thresholds
+        updateBossPhase(b)
+
+        // TODO: boss movement/attacks (Phase 3 future)
+        // For now: boss stays in place
+    }
+
+    /**
+     * Update boss phase based on HP thresholds (Phase 3 framework).
+     * Uses indexed while loop, no allocations.
+     */
+    private fun updateBossPhase(boss: Boss) {
+        val hpPercent = boss.combat.hp.toFloat() / boss.combat.maxHp.toFloat()
+
+        // Check phase thresholds in order (indexed while loop)
+        var i = boss.phaseIndex
+        while (i < boss.phaseThresholds.size) {
+            if (hpPercent <= boss.phaseThresholds[i]) {
+                if (i > boss.phaseIndex) {
+                    // Phase transition detected
+                    boss.phaseIndex = i
+                    if (BuildConfig.DEBUG) {
+                        android.util.Log.d("Boss", "Phase transition to ${boss.phaseIndex + 1} at ${(hpPercent * 100).toInt()}% HP")
+                    }
+                }
+                break
+            }
+            i++
+        }
+    }
+
     private fun updateEnemyBullets(dtMs: Long) {
         val speedScale = dtMs / 16f
 
@@ -777,6 +842,43 @@ class GameEngine(
             if (!bulletHit) {
                 bulletIdx--
             }
+        }
+    }
+
+    /**
+     * Check bullet-boss collisions (Phase 3 framework).
+     * Reuses existing collision detection pattern.
+     */
+    private fun checkBulletBossCollisions() {
+        val b = boss ?: return
+        if (!b.isAlive) return
+
+        // Use reverse index loop, squared distance (no allocations, no sqrt)
+        var bulletIdx = bullets.size - 1
+        while (bulletIdx >= 0) {
+            val bullet = bullets[bulletIdx]
+
+            val dx = bullet.x - b.x
+            val dy = bullet.y - b.y
+            val distSq = dx * dx + dy * dy
+            val radiusSq = (b.size / 2) * (b.size / 2)
+
+            if (distSq < radiusSq) {
+                // Apply damage via combat system
+                applyDamageToBoss(b, 1, DamageSource.PLAYER_BULLET)
+
+                // Remove bullet (already hit)
+                bullets.removeAt(bulletIdx)
+
+                // Remove boss if dead
+                if (!b.isAlive) {
+                    boss = null
+                }
+
+                break  // Bullet can only hit boss once
+            }
+
+            bulletIdx--
         }
     }
 
@@ -975,6 +1077,44 @@ class GameEngine(
 
         // Spawn damage popup at hit location
         spawnDamagePopup(enemy.x, enemy.y - enemy.size * 0.2f, amount, style)
+
+        return true  // Damage applied
+    }
+
+    /**
+     * Apply damage to boss (Phase 3 framework).
+     * Reuses existing combat semantics: invuln check, hp clamp, kill transition once.
+     * Spawns damage popup with style=0 (normal).
+     */
+    private fun applyDamageToBoss(
+        boss: Boss,
+        amount: Int,
+        source: DamageSource
+    ): Boolean {
+        val combat = boss.combat
+
+        // Check invulnerability
+        if (combat.invulnRemainingMs > 0) {
+            return false  // Damage blocked
+        }
+
+        // Track if this will be a kill (hp transition to 0)
+        val wasAlive = combat.hp > 0
+
+        // Apply damage
+        combat.hp = (combat.hp - amount).coerceAtLeast(0)
+
+        // Award kill score exactly once (only on hp transition to 0)
+        if (wasAlive && combat.hp == 0) {
+            killScore += 100  // Boss kill is worth more
+
+            if (BuildConfig.DEBUG) {
+                android.util.Log.d("Combat", "Boss defeated by $source (HP: 0/${combat.maxHp})")
+            }
+        }
+
+        // Spawn damage popup at hit location (style=0 for now, no special boss styling)
+        spawnDamagePopup(boss.x, boss.y - boss.size * 0.2f, amount, style = 0)
 
         return true  // Damage applied
     }

@@ -1745,6 +1745,40 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                 }
             }
 
+            // Draw boss health bar (Phase 3 framework)
+            gameEngine.bossRef?.let { boss ->
+                if (boss.isAlive) {
+                    val barWidth = screenWidth * 0.6f
+                    val barHeight = 20f
+                    val barX = (screenWidth - barWidth) / 2
+                    val barY = 50f
+
+                    // Background (dark red)
+                    drawRect(
+                        color = Color(0xFF400000),
+                        topLeft = Offset(barX, barY),
+                        size = Size(barWidth, barHeight)
+                    )
+
+                    // Health fill (bright red)
+                    val hpPercent = boss.combat.hp.toFloat() / boss.combat.maxHp.toFloat()
+                    val fillWidth = barWidth * hpPercent
+                    drawRect(
+                        color = Color(0xFFFF0000),
+                        topLeft = Offset(barX, barY),
+                        size = Size(fillWidth, barHeight)
+                    )
+
+                    // Border (white)
+                    drawRect(
+                        color = Color.White,
+                        topLeft = Offset(barX, barY),
+                        size = Size(barWidth, barHeight),
+                        style = Stroke(width = 2f)
+                    )
+                }
+            }
+
             // Draw player (read from stable reference, NO copy)
             if (gameState.isAlive) {
                 // Phase 2B: Flash player during invulnerability frames
