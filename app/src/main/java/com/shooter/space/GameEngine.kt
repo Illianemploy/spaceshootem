@@ -550,8 +550,11 @@ class GameEngine(
             Random.nextLong(600L, 1101L)  // type 3-4: faster firing
         }
 
+        val spawnX = randFloat(size, screenWidth - size)
+        val strafeDir = if ((spawnX.toInt() + enemies.size) % 2 == 0) 1 else -1  // Deterministic strafe direction
+
         val enemy = Enemy(
-            x = randFloat(size, screenWidth - size),
+            x = spawnX,
             y = -size,
             size = size,
             speed = 3f * difficultyScaler.getSpeedMultiplier(),
@@ -568,7 +571,8 @@ class GameEngine(
                 contactDamage = 1,  // Standard contact damage
                 invulnRemainingMs = 0L
             ),
-            shootCooldownMs = initialCooldown
+            shootCooldownMs = initialCooldown,
+            strafeDir = strafeDir
         )
 
         enemies.add(enemy)
@@ -640,12 +644,22 @@ class GameEngine(
 
     private fun updateEnemies(dtMs: Long) {
         val dtSec = dtMs / 1000f
+        val speedScale = dtMs / 16f // Scale speed relative to 16ms baseline
+
+        // Phase 4 AI: range-based movement constants
+        val preferredRangePx = 250f
+        val rangeDeadbandPx = 50f
+        val approachSpeed = 0.4f
+        val retreatSpeed = 0.3f
+        val strafeSpeed = 0.5f
+        val separationRadius = 80f
+        val separationStrength = 0.2f
 
         var i = 0
         while (i < enemies.size) {
             val enemy = enemies[i]
             enemy.timeAlive += dtSec
-            enemy.rotation += 1f * (dtMs / 16f) // Scale rotation by delta time
+            enemy.rotation += 1f * (dtMs / 16f)
 
             // Update behavior controller with correct combat health
             val c = enemy.combat
@@ -658,19 +672,69 @@ class GameEngine(
                 maxHealth = c.maxHp
             )
 
-            // Apply behavior movement
-            val state = enemy.behaviorController?.currentState ?: EnemyState.IDLE
-            val speedMultiplier = when (state) {
-                EnemyState.APPROACH -> 0.5f
-                EnemyState.STRAFE -> 0.7f
-                EnemyState.FLEE -> 0.3f
-                EnemyState.IDLE -> 1.0f
+            // Phase 4 AI: Preferred range + strafe movement
+            val dx = player.x - enemy.x
+            val dy = player.y - enemy.y
+            val distSq = dx * dx + dy * dy
+            val dist = kotlin.math.sqrt(distSq)
+
+            var moveX = 0f
+            var moveY = 0f
+
+            // Range-based movement
+            if (dist > preferredRangePx + rangeDeadbandPx) {
+                // Too far: approach
+                if (dist > 0f) {
+                    moveX = (dx / dist) * enemy.speed * approachSpeed * speedScale
+                    moveY = (dy / dist) * enemy.speed * approachSpeed * speedScale
+                }
+            } else if (dist < preferredRangePx - rangeDeadbandPx) {
+                // Too close: retreat
+                if (dist > 0f) {
+                    moveX = -(dx / dist) * enemy.speed * retreatSpeed * speedScale
+                    moveY = -(dy / dist) * enemy.speed * retreatSpeed * speedScale
+                }
+            } else {
+                // In range: strafe (perpendicular to player direction)
+                if (dist > 0f) {
+                    val perpX = -dy / dist  // Perpendicular vector
+                    val perpY = dx / dist
+                    moveX = perpX * enemy.strafeDir * enemy.speed * strafeSpeed * speedScale
+                    moveY = perpY * enemy.strafeDir * enemy.speed * strafeSpeed * speedScale
+                }
             }
 
-            val speedScale = dtMs / 16f // Scale speed relative to 16ms baseline
-            enemy.y += enemy.speed * speedMultiplier * speedScale
+            // Phase 4 AI: Separation (anti-clump) - cap neighbor checks to 8 for performance
+            var sepX = 0f
+            var sepY = 0f
+            var checksLeft = 8
+            var j = 0
+            while (j < enemies.size && checksLeft > 0) {
+                if (j != i) {
+                    val other = enemies[j]
+                    val sx = enemy.x - other.x
+                    val sy = enemy.y - other.y
+                    val sSq = sx * sx + sy * sy
+                    val sepRadiusSq = separationRadius * separationRadius
 
-            // Enemy shooting logic (Phase 2)
+                    if (sSq > 0f && sSq < sepRadiusSq) {
+                        val sDist = kotlin.math.sqrt(sSq)
+                        sepX += (sx / sDist) * separationStrength * enemy.speed * speedScale
+                        sepY += (sy / sDist) * separationStrength * enemy.speed * speedScale
+                    }
+                    checksLeft--
+                }
+                j++
+            }
+
+            // Apply combined movement
+            enemy.x += moveX + sepX
+            enemy.y += moveY + sepY
+
+            // Keep enemy on screen horizontally
+            enemy.x = enemy.x.coerceIn(enemy.size, screenWidth - enemy.size)
+
+            // Enemy shooting logic (Phase 2 + Phase 4 lead aiming)
             enemy.shootCooldownMs = (enemy.shootCooldownMs - dtMs).coerceAtLeast(0L)
 
             if (enemy.shootCooldownMs == 0L && enemy.y >= 0f && enemy.y <= screenHeight && enemyBullets.size < MAX_ENEMY_BULLETS) {
@@ -685,13 +749,25 @@ class GameEngine(
                 val vy: Float
 
                 if (enemy.type <= 2) {
-                    // STRAIGHT_DOWN
+                    // STRAIGHT_DOWN (no lead)
                     vx = 0f
                     vy = bulletSpeed
                 } else {
-                    // AIM_AT_PLAYER
-                    val dx = player.x - spawnX
-                    val dy = player.y - spawnY
+                    // Phase 4 AI: Lead aiming (predict player position)
+                    val playerSpeedSq = player.velocityX * player.velocityX + player.velocityY * player.velocityY
+                    val leadT = if (playerSpeedSq > 1f) {
+                        // Player moving: use lead time
+                        0.25f.coerceIn(0.15f, 0.35f)
+                    } else {
+                        // Player slow/stationary: direct aim
+                        0f
+                    }
+
+                    val aimX = player.x + player.velocityX * leadT * 60f  // 60 fps baseline
+                    val aimY = player.y + player.velocityY * leadT * 60f
+
+                    val dx = aimX - spawnX
+                    val dy = aimY - spawnY
                     val dist = kotlin.math.sqrt(dx * dx + dy * dy)
                     if (dist > 0f) {
                         vx = (dx / dist) * bulletSpeed
@@ -721,7 +797,7 @@ class GameEngine(
                 }
 
                 if (BuildConfig.DEBUG) {
-                    android.util.Log.d("Combat", "Enemy type ${enemy.type} fired bullet at (${spawnX.toInt()}, ${spawnY.toInt()})")
+                    android.util.Log.d("Combat", "Enemy type ${enemy.type} fired bullet at (${spawnX.toInt()}, ${spawnY.toInt()}) with lead=${if (enemy.type > 2) "ON" else "OFF"}")
                 }
             }
 
