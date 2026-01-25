@@ -46,6 +46,11 @@ class GameEngine(
     private val damagePopups = Array(DAMAGE_POPUP_CAP) { DamagePopup(0f, 0f, 0, 0L, 0, "") }
     private var damagePopupHead = 0
 
+    // Telegraphs - fixed-size pool (Phase 4 visual telegraphing, allocation-free hot path)
+    private val TELEGRAPH_CAP = 16
+    private val telegraphs = Array(TELEGRAPH_CAP) { Telegraph(0f, 0f, 0L, 0f, 0) }
+    private var telegraphHead = 0
+
     // === PUBLIC STABLE REFERENCES (for rendering, NO per-frame copy) ===
     // UI reads these directly to avoid allocation. Mutable, but rendering is read-only.
     val playerRef: Player get() = player
@@ -56,6 +61,7 @@ class GameEngine(
     val spaceCenterRef: SpaceCenter? get() = spaceCenter
     val powerUpsRef: List<WorldPowerUp> get() = powerUpSystem.worldPowerUps
     val damagePopupsRef: Array<DamagePopup> get() = damagePopups
+    val telegraphsRef: Array<Telegraph> get() = telegraphs  // Phase 4: telegraph stable reference
     val bossRef: Boss? get() = boss  // Phase 3: boss stable reference
 
     // Game metrics
@@ -270,6 +276,9 @@ class GameEngine(
 
         // Update damage popups (visual-only, no gameplay impact)
         updateDamagePopups(dtMs)
+
+        // Update telegraphs (Phase 4 visual-only, no gameplay impact)
+        updateTelegraphs(dtMs)
 
         // Award score and currency based on survival time
         awardScoreAndCurrency(currentTime)
@@ -769,6 +778,10 @@ class GameEngine(
         if (newPhase > boss.phaseIndex) {
             boss.phaseIndex = newPhase
             // Phase 4: Update attack parameters based on phase
+            boss.patternType = when (newPhase) {
+                1 -> 0   // Phase 1: SPREAD
+                else -> 1  // Phase 2+: SPIRAL
+            }
             boss.spreadCount = when (newPhase) {
                 1 -> 3   // Phase 1: 3 bullets
                 2 -> 5   // Phase 2: 5 bullets
@@ -777,8 +790,8 @@ class GameEngine(
             }
             boss.attackCooldownMs = when (newPhase) {
                 1 -> 2000L  // Phase 1: 2s cooldown
-                2 -> 1500L  // Phase 2: 1.5s cooldown
-                3 -> 1000L  // Phase 3: 1s cooldown
+                2 -> 800L   // Phase 2: 0.8s cooldown (faster for spiral)
+                3 -> 500L   // Phase 3: 0.5s cooldown (fastest)
                 else -> 2000L
             }
         }
@@ -793,50 +806,83 @@ class GameEngine(
         // Tick down attack timer
         boss.attackTimerMs -= dtMs
 
+        // Spawn telegraph when timer crosses below 200ms (Phase 4 telegraphing)
+        val telegraphThreshold = 200L
+        if (boss.attackTimerMs > 0 && boss.attackTimerMs <= telegraphThreshold && boss.attackTimerMs + dtMs > telegraphThreshold) {
+            // Spawn telegraph once when crossing threshold
+            spawnTelegraph(boss.x, boss.y + boss.size * 0.5f, 30f, telegraphThreshold, style = 0)
+        }
+
         // Fire when timer expires
         if (boss.attackTimerMs <= 0) {
             // Reset timer (preserve overshoot for stable cadence)
             boss.attackTimerMs += boss.attackCooldownMs
             if (boss.attackTimerMs <= 0L) boss.attackTimerMs = boss.attackCooldownMs
 
-            // SPREAD pattern: spawn N bullets in evenly spaced angles around downward direction
+            // Common parameters
             val bulletSpeed = 10f
             val bulletDamage = 1
             val bulletRadius = 6f
             val spawnX = boss.x
             val spawnY = boss.y + boss.size * 0.5f
 
-            val spreadAngle = 60f  // Total spread arc in degrees (±30° from down)
-            val angleStep = if (boss.spreadCount > 1) {
-                spreadAngle / (boss.spreadCount - 1)
-            } else {
-                0f
-            }
-            val startAngle = -spreadAngle / 2  // Start from left side of spread
+            // Pattern selection based on patternType (0=SPREAD, 1=SPIRAL)
+            if (boss.patternType == 1) {
+                // SPIRAL pattern: spawn 1 bullet at current angle, increment angle
+                if (enemyBullets.size < MAX_ENEMY_BULLETS) {
+                    val angleRad = Math.toRadians(boss.spiralAngleDeg.toDouble() + 90.0)  // +90 for downward base
+                    val vx = (bulletSpeed * kotlin.math.cos(angleRad)).toFloat()
+                    val vy = (bulletSpeed * kotlin.math.sin(angleRad)).toFloat()
 
-            // Spawn bullets using indexed while loop (no allocations)
-            var i = 0
-            while (i < boss.spreadCount) {
-                if (enemyBullets.size >= MAX_ENEMY_BULLETS) break  // Respect cap
-
-                val angleDeg = startAngle + (angleStep * i)
-                val angleRad = Math.toRadians(angleDeg.toDouble() + 90.0)  // +90 because 0° is right, we want down
-
-                val vx = (bulletSpeed * kotlin.math.cos(angleRad)).toFloat()
-                val vy = (bulletSpeed * kotlin.math.sin(angleRad)).toFloat()
-
-                enemyBullets.add(
-                    EnemyBullet(
-                        x = spawnX,
-                        y = spawnY,
-                        vx = vx,
-                        vy = vy,
-                        damage = bulletDamage,
-                        radius = bulletRadius
+                    enemyBullets.add(
+                        EnemyBullet(
+                            x = spawnX,
+                            y = spawnY,
+                            vx = vx,
+                            vy = vy,
+                            damage = bulletDamage,
+                            radius = bulletRadius
+                        )
                     )
-                )
 
-                i++
+                    // Increment spiral angle and wrap
+                    boss.spiralAngleDeg += boss.spiralStepDeg
+                    if (boss.spiralAngleDeg >= 360f) boss.spiralAngleDeg -= 360f
+                }
+            } else {
+                // SPREAD pattern: spawn N bullets in evenly spaced angles around downward direction
+                val spreadAngle = 60f  // Total spread arc in degrees (±30° from down)
+                val angleStep = if (boss.spreadCount > 1) {
+                    spreadAngle / (boss.spreadCount - 1)
+                } else {
+                    0f
+                }
+                val startAngle = -spreadAngle / 2  // Start from left side of spread
+
+                // Spawn bullets using indexed while loop (no allocations)
+                var i = 0
+                while (i < boss.spreadCount) {
+                    if (enemyBullets.size >= MAX_ENEMY_BULLETS) break  // Respect cap
+
+                    val angleDeg = startAngle + (angleStep * i)
+                    val angleRad = Math.toRadians(angleDeg.toDouble() + 90.0)  // +90 because 0° is right, we want down
+
+                    val vx = (bulletSpeed * kotlin.math.cos(angleRad)).toFloat()
+                    val vy = (bulletSpeed * kotlin.math.sin(angleRad)).toFloat()
+
+                    enemyBullets.add(
+                        EnemyBullet(
+                            x = spawnX,
+                            y = spawnY,
+                            vx = vx,
+                            vy = vy,
+                            damage = bulletDamage,
+                            radius = bulletRadius
+                        )
+                    )
+
+                    i++
+                }
             }
         }
     }
@@ -870,6 +916,38 @@ class GameEngine(
                 p.remainingMs = if (next > 0L) next else 0L
                 // drift up (simple, deterministic, no trig)
                 p.y -= (0.05f * dtMs.toFloat())
+            }
+            i++
+        }
+    }
+
+    /**
+     * Spawn telegraph visual (Phase 4 telegraphing).
+     * Ring buffer with cap, allocation-free.
+     */
+    private fun spawnTelegraph(x: Float, y: Float, radius: Float, lifetimeMs: Long, style: Int = 0) {
+        val t = telegraphs[telegraphHead]
+        t.x = x
+        t.y = y
+        t.remainingMs = lifetimeMs
+        t.radius = radius
+        t.style = style
+        telegraphHead++
+        if (telegraphHead >= TELEGRAPH_CAP) telegraphHead = 0
+    }
+
+    /**
+     * Update telegraphs (Phase 4 telegraphing).
+     * Indexed while loop, no allocations.
+     */
+    private fun updateTelegraphs(dtMs: Long) {
+        var i = 0
+        while (i < TELEGRAPH_CAP) {
+            val t = telegraphs[i]
+            val rem = t.remainingMs
+            if (rem > 0L) {
+                val next = rem - dtMs
+                t.remainingMs = if (next > 0L) next else 0L
             }
             i++
         }
