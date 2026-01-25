@@ -740,7 +740,10 @@ class GameEngine(
         // Update phase based on HP thresholds
         updateBossPhase(b)
 
-        // TODO: boss movement/attacks (Phase 3 future)
+        // Update boss attacks (Phase 4)
+        updateBossAttacks(b, dtMs)
+
+        // TODO: boss movement (Phase 3+ future)
         // For now: boss stays in place
     }
 
@@ -765,6 +768,75 @@ class GameEngine(
         // Update phase index if changed
         if (newPhase > boss.phaseIndex) {
             boss.phaseIndex = newPhase
+            // Phase 4: Update attack parameters based on phase
+            boss.spreadCount = when (newPhase) {
+                1 -> 3   // Phase 1: 3 bullets
+                2 -> 5   // Phase 2: 5 bullets
+                3 -> 7   // Phase 3: 7 bullets
+                else -> 3
+            }
+            boss.attackCooldownMs = when (newPhase) {
+                1 -> 2000L  // Phase 1: 2s cooldown
+                2 -> 1500L  // Phase 2: 1.5s cooldown
+                3 -> 1000L  // Phase 3: 1s cooldown
+                else -> 2000L
+            }
+        }
+    }
+
+    /**
+     * Update boss attacks (Phase 4).
+     * Uses indexed while loop to spawn SPREAD pattern bullets.
+     * No temporary lists, no allocations.
+     */
+    private fun updateBossAttacks(boss: Boss, dtMs: Long) {
+        // Tick down attack timer
+        boss.attackTimerMs -= dtMs
+
+        // Fire when timer expires
+        if (boss.attackTimerMs <= 0) {
+            // Reset timer
+            boss.attackTimerMs = boss.attackCooldownMs
+
+            // SPREAD pattern: spawn N bullets in evenly spaced angles around downward direction
+            val bulletSpeed = 10f
+            val bulletDamage = 1
+            val bulletRadius = 6f
+            val spawnX = boss.x
+            val spawnY = boss.y + boss.size * 0.5f
+
+            val spreadAngle = 60f  // Total spread arc in degrees (±30° from down)
+            val angleStep = if (boss.spreadCount > 1) {
+                spreadAngle / (boss.spreadCount - 1)
+            } else {
+                0f
+            }
+            val startAngle = -spreadAngle / 2  // Start from left side of spread
+
+            // Spawn bullets using indexed while loop (no allocations)
+            var i = 0
+            while (i < boss.spreadCount) {
+                if (enemyBullets.size >= MAX_ENEMY_BULLETS) break  // Respect cap
+
+                val angleDeg = startAngle + (angleStep * i)
+                val angleRad = Math.toRadians(angleDeg.toDouble() + 90.0)  // +90 because 0° is right, we want down
+
+                val vx = (bulletSpeed * kotlin.math.cos(angleRad)).toFloat()
+                val vy = (bulletSpeed * kotlin.math.sin(angleRad)).toFloat()
+
+                enemyBullets.add(
+                    EnemyBullet(
+                        x = spawnX,
+                        y = spawnY,
+                        vx = vx,
+                        vy = vy,
+                        damage = bulletDamage,
+                        radius = bulletRadius
+                    )
+                )
+
+                i++
+            }
         }
     }
 
