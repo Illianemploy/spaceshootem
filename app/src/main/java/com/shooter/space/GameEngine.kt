@@ -42,7 +42,7 @@ class GameEngine(
     // Damage popups - fixed-size pool (allocation-free hot path)
     private val DAMAGE_POPUP_CAP = 64
     private val DAMAGE_POPUP_LIFETIME_MS = 600L
-    private val damagePopups = Array(DAMAGE_POPUP_CAP) { DamagePopup(0f, 0f, 0, 0L, 0) }
+    private val damagePopups = Array(DAMAGE_POPUP_CAP) { DamagePopup(0f, 0f, 0, 0L, 0, "") }
     private var damagePopupHead = 0
 
     // === PUBLIC STABLE REFERENCES (for rendering, NO per-frame copy) ===
@@ -925,6 +925,7 @@ class GameEngine(
         p.value = value
         p.remainingMs = DAMAGE_POPUP_LIFETIME_MS
         p.style = style
+        p.text = value.toString()  // Cache string at spawn (not in render loop)
         damagePopupHead++
         if (damagePopupHead >= DAMAGE_POPUP_CAP) damagePopupHead = 0
     }
@@ -951,7 +952,8 @@ class GameEngine(
         enemy.health = combat.hp
 
         // Award kill score exactly once (only on hp transition to 0)
-        if (wasAlive && combat.hp == 0) {
+        val isKillingBlow = wasAlive && combat.hp == 0
+        if (isKillingBlow) {
             killScore += 10
 
             if (BuildConfig.DEBUG) {
@@ -959,8 +961,20 @@ class GameEngine(
             }
         }
 
+        // Compute popup style based on existing combat signals (Phase 2D)
+        var style = 0
+        if (source == DamageSource.PLAYER_BULLET) {
+            // CRIT: killing blow
+            if (isKillingBlow) style = style or POPUP_STYLE_CRIT
+
+            // FIRE: FIREPOWER active
+            if (powerUpSystem.hasEffect(PowerUpType.FIREPOWER)) {
+                style = style or POPUP_STYLE_FIRE
+            }
+        }
+
         // Spawn damage popup at hit location
-        spawnDamagePopup(enemy.x, enemy.y - enemy.size * 0.2f, amount, style = 0)
+        spawnDamagePopup(enemy.x, enemy.y - enemy.size * 0.2f, amount, style)
 
         return true  // Damage applied
     }
