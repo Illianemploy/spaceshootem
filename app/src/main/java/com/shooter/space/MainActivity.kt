@@ -131,7 +131,7 @@ data class EnemyBullet(
 
 /**
  * Damage popup entity (floating damage numbers).
- * Primitives only, fixed-size pool, no allocations during update.
+ * Primitives only + cached text, fixed-size pool, no allocations during update/render.
  * Unused slots have remainingMs == 0.
  */
 data class DamagePopup(
@@ -139,7 +139,8 @@ data class DamagePopup(
     var y: Float,
     var value: Int,
     var remainingMs: Long,
-    var style: Int // reserved for later (crit/element), default 0
+    var style: Int,  // bitfield (Phase 2D): CRIT/FIRE/ICE etc
+    var text: String = ""  // cached at spawn to avoid per-frame toString()
 )
 
 // ============================================================================
@@ -1533,6 +1534,7 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
     }
 
     // Cached Paint objects for damage popups (allocation-free rendering)
+    // Normal style
     val dmgPaintFill = remember {
         android.graphics.Paint().apply {
             color = android.graphics.Color.WHITE
@@ -1542,6 +1544,66 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
         }
     }
     val dmgPaintStroke = remember {
+        android.graphics.Paint().apply {
+            color = android.graphics.Color.BLACK
+            textSize = 36f
+            textAlign = android.graphics.Paint.Align.CENTER
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 3f
+            isAntiAlias = true
+        }
+    }
+
+    // Crit style (Phase 2D: gold, bigger)
+    val dmgPaintCritFill = remember {
+        android.graphics.Paint().apply {
+            color = android.graphics.Color.rgb(255, 215, 0)  // Gold
+            textSize = 48f
+            textAlign = android.graphics.Paint.Align.CENTER
+            isAntiAlias = true
+        }
+    }
+    val dmgPaintCritStroke = remember {
+        android.graphics.Paint().apply {
+            color = android.graphics.Color.BLACK
+            textSize = 48f
+            textAlign = android.graphics.Paint.Align.CENTER
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 4f
+            isAntiAlias = true
+        }
+    }
+
+    // Fire style (Phase 2D: orange)
+    val dmgPaintFireFill = remember {
+        android.graphics.Paint().apply {
+            color = android.graphics.Color.rgb(255, 140, 0)  // Dark orange
+            textSize = 36f
+            textAlign = android.graphics.Paint.Align.CENTER
+            isAntiAlias = true
+        }
+    }
+    val dmgPaintFireStroke = remember {
+        android.graphics.Paint().apply {
+            color = android.graphics.Color.BLACK
+            textSize = 36f
+            textAlign = android.graphics.Paint.Align.CENTER
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 3f
+            isAntiAlias = true
+        }
+    }
+
+    // Ice style (Phase 2D: cyan - placeholder)
+    val dmgPaintIceFill = remember {
+        android.graphics.Paint().apply {
+            color = android.graphics.Color.rgb(0, 255, 255)  // Cyan
+            textSize = 36f
+            textAlign = android.graphics.Paint.Align.CENTER
+            isAntiAlias = true
+        }
+    }
+    val dmgPaintIceStroke = remember {
         android.graphics.Paint().apply {
             color = android.graphics.Color.BLACK
             textSize = 36f
@@ -1640,7 +1702,7 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                 drawEnemy(enemy, enemyRenderer)
             }
 
-            // Draw damage popups (allocation-free: indexed while loop, cached Paint)
+            // Draw damage popups (allocation-free: indexed while loop, cached Paint, cached text)
             drawIntoCanvas { canvas ->
                 val nativeCanvas = canvas.nativeCanvas
                 val arr = gameEngine.damagePopupsRef
@@ -1648,11 +1710,36 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                 while (i < arr.size) {
                     val p = arr[i]
                     if (p.remainingMs > 0L) {
-                        val text = p.value.toString()
+                        // Select paints based on style bitflags (Phase 2D)
+                        val fillPaint: android.graphics.Paint
+                        val strokePaint: android.graphics.Paint
+                        var yOffset = 0f
+
+                        when {
+                            (p.style and POPUP_STYLE_CRIT) != 0 -> {
+                                fillPaint = dmgPaintCritFill
+                                strokePaint = dmgPaintCritStroke
+                                yOffset = -6f  // Crit floats slightly higher
+                            }
+                            (p.style and POPUP_STYLE_FIRE) != 0 -> {
+                                fillPaint = dmgPaintFireFill
+                                strokePaint = dmgPaintFireStroke
+                            }
+                            (p.style and POPUP_STYLE_ICE) != 0 -> {
+                                fillPaint = dmgPaintIceFill
+                                strokePaint = dmgPaintIceStroke
+                            }
+                            else -> {
+                                fillPaint = dmgPaintFill
+                                strokePaint = dmgPaintStroke
+                            }
+                        }
+
+                        val drawY = p.y + yOffset
                         // Draw stroke (outline) first for visibility
-                        nativeCanvas.drawText(text, p.x, p.y, dmgPaintStroke)
+                        nativeCanvas.drawText(p.text, p.x, drawY, strokePaint)
                         // Draw fill on top
-                        nativeCanvas.drawText(text, p.x, p.y, dmgPaintFill)
+                        nativeCanvas.drawText(p.text, p.x, drawY, fillPaint)
                     }
                     i++
                 }
