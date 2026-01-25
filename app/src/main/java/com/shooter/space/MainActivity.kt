@@ -1614,6 +1614,10 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
         }
     }
 
+    // Boss health bar colors (Phase 3 framework - hoisted to avoid per-frame allocation)
+    val bossHealthBarBgColor = remember { Color(0xFF400000) }  // Dark red
+    val bossHealthBarFillColor = remember { Color(0xFFFF0000) }  // Bright red
+
     Box(modifier = Modifier.fillMaxSize()) {
         Canvas(
             modifier = Modifier
@@ -1745,7 +1749,7 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                 }
             }
 
-            // Draw boss health bar (Phase 3 framework)
+            // Draw boss health bar (Phase 3 framework - uses cached colors)
             gameEngine.bossRef?.let { boss ->
                 if (boss.isAlive) {
                     val barWidth = screenWidth * 0.6f
@@ -1753,23 +1757,23 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                     val barX = (screenWidth - barWidth) / 2
                     val barY = 50f
 
-                    // Background (dark red)
+                    // Background (dark red - cached)
                     drawRect(
-                        color = Color(0xFF400000),
+                        color = bossHealthBarBgColor,
                         topLeft = Offset(barX, barY),
                         size = Size(barWidth, barHeight)
                     )
 
-                    // Health fill (bright red)
+                    // Health fill (bright red - cached)
                     val hpPercent = boss.combat.hp.toFloat() / boss.combat.maxHp.toFloat()
                     val fillWidth = barWidth * hpPercent
                     drawRect(
-                        color = Color(0xFFFF0000),
+                        color = bossHealthBarFillColor,
                         topLeft = Offset(barX, barY),
                         size = Size(fillWidth, barHeight)
                     )
 
-                    // Border (white)
+                    // Border (white - static color, no allocation)
                     drawRect(
                         color = Color.White,
                         topLeft = Offset(barX, barY),

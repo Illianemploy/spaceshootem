@@ -747,24 +747,24 @@ class GameEngine(
     /**
      * Update boss phase based on HP thresholds (Phase 3 framework).
      * Uses indexed while loop, no allocations.
+     * Thresholds are in descending order (e.g., 0.75, 0.5, 0.25).
      */
     private fun updateBossPhase(boss: Boss) {
         val hpPercent = boss.combat.hp.toFloat() / boss.combat.maxHp.toFloat()
 
-        // Check phase thresholds in order (indexed while loop)
+        // Find highest phase threshold we've crossed (indexed while loop)
+        var newPhase = boss.phaseIndex
         var i = boss.phaseIndex
         while (i < boss.phaseThresholds.size) {
             if (hpPercent <= boss.phaseThresholds[i]) {
-                if (i > boss.phaseIndex) {
-                    // Phase transition detected
-                    boss.phaseIndex = i
-                    if (BuildConfig.DEBUG) {
-                        android.util.Log.d("Boss", "Phase transition to ${boss.phaseIndex + 1} at ${(hpPercent * 100).toInt()}% HP")
-                    }
-                }
-                break
+                newPhase = i + 1  // Advance to next phase
             }
             i++
+        }
+
+        // Update phase index if changed
+        if (newPhase > boss.phaseIndex) {
+            boss.phaseIndex = newPhase
         }
     }
 
