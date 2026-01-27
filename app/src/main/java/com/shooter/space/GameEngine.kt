@@ -646,14 +646,18 @@ class GameEngine(
         val dtSec = dtMs / 1000f
         val speedScale = dtMs / 16f // Scale speed relative to 16ms baseline
 
-        // Phase 4 AI: range-based movement constants
-        val preferredRangePx = 250f
+        // Phase 4 AI: range-based movement constants (baseline)
+        val baseRangePx = 250f
         val rangeDeadbandPx = 50f
-        val approachSpeed = 0.4f
-        val retreatSpeed = 0.3f
-        val strafeSpeed = 0.5f
-        val separationRadius = 80f
-        val separationStrength = 0.2f
+        val baseApproachSpeed = 0.4f
+        val baseRetreatSpeed = 0.3f
+        val baseStrafeSpeed = 0.5f
+        val baseSeparationRadius = 80f
+        val baseSeparationStrength = 0.2f
+
+        // Phase 5: Difficulty scaling (enemies get more aggressive at higher difficulty)
+        val diffLevel = difficultyScaler.getCurrentLevel()
+        val aggressionFactor = (1.0f + diffLevel * 0.03f).coerceAtMost(1.4f)
 
         var i = 0
         while (i < enemies.size) {
@@ -672,6 +676,71 @@ class GameEngine(
                 maxHealth = c.maxHp
             )
 
+            // Phase 5.1: Size-tier parameter scaling (make types feel distinct)
+            val rangeOffset: Float
+            val strafeMod: Float
+            val sepMod: Float
+            val leadMod: Float
+            when (enemy.sizeTier) {
+                SizeTier.SMALL -> {
+                    rangeOffset = +80f   // Evasive: stay far
+                    strafeMod = +0.3f    // Fast lateral movement
+                    sepMod = 1.3f        // Spread out more
+                    leadMod = 0.8f       // Less accurate
+                }
+                SizeTier.MEDIUM -> {
+                    rangeOffset = 0f     // Baseline
+                    strafeMod = 0f
+                    sepMod = 1.0f
+                    leadMod = 1.0f
+                }
+                SizeTier.LARGE -> {
+                    rangeOffset = -60f   // Aggressive: get close
+                    strafeMod = -0.2f    // Slow lateral movement
+                    sepMod = 0.7f        // Clump together
+                    leadMod = 1.2f       // More accurate
+                }
+                SizeTier.ELITE -> {
+                    rangeOffset = +30f   // Tactical: mid-range
+                    strafeMod = +0.15f   // Controlled movement
+                    sepMod = 1.5f        // Maximum spacing
+                    leadMod = 1.5f       // Best accuracy
+                }
+            }
+
+            // Phase 5.3: Controller state integration (map states to behavior modifiers)
+            val stateMod: Float
+            val strafeStateMod: Float
+            when (enemy.behaviorController?.currentState) {
+                EnemyState.FLEE -> {
+                    stateMod = 1.5f      // Increase range (back off)
+                    strafeStateMod = 0.7f // Reduce strafe (focus on escaping)
+                }
+                EnemyState.APPROACH -> {
+                    stateMod = 0.8f      // Decrease range (close in)
+                    strafeStateMod = 0.5f // Reduce strafe (focus on closing)
+                }
+                EnemyState.STRAFE -> {
+                    stateMod = 1.0f      // Normal range
+                    strafeStateMod = 1.3f // Increase strafe (dodging)
+                }
+                EnemyState.IDLE -> {
+                    stateMod = 1.1f      // Slightly far (cautious)
+                    strafeStateMod = 0.9f // Slightly slow
+                }
+                else -> {
+                    stateMod = 1.0f
+                    strafeStateMod = 1.0f
+                }
+            }
+
+            // Compute effective parameters (combine size-tier + difficulty + state)
+            val effectiveRange = (baseRangePx + rangeOffset) * stateMod / aggressionFactor
+            val effectiveApproach = baseApproachSpeed * aggressionFactor
+            val effectiveRetreat = baseRetreatSpeed
+            val effectiveStrafe = (baseStrafeSpeed + strafeMod) * strafeStateMod
+            val effectiveSeparation = baseSeparationStrength * sepMod
+
             // Phase 4 AI: Preferred range + strafe movement
             val dx = player.x - enemy.x
             val dy = player.y - enemy.y
@@ -681,26 +750,26 @@ class GameEngine(
             var moveX = 0f
             var moveY = 0f
 
-            // Range-based movement
-            if (dist > preferredRangePx + rangeDeadbandPx) {
+            // Range-based movement (now with effective parameters)
+            if (dist > effectiveRange + rangeDeadbandPx) {
                 // Too far: approach
                 if (dist > 0f) {
-                    moveX = (dx / dist) * enemy.speed * approachSpeed * speedScale
-                    moveY = (dy / dist) * enemy.speed * approachSpeed * speedScale
+                    moveX = (dx / dist) * enemy.speed * effectiveApproach * speedScale
+                    moveY = (dy / dist) * enemy.speed * effectiveApproach * speedScale
                 }
-            } else if (dist < preferredRangePx - rangeDeadbandPx) {
+            } else if (dist < effectiveRange - rangeDeadbandPx) {
                 // Too close: retreat
                 if (dist > 0f) {
-                    moveX = -(dx / dist) * enemy.speed * retreatSpeed * speedScale
-                    moveY = -(dy / dist) * enemy.speed * retreatSpeed * speedScale
+                    moveX = -(dx / dist) * enemy.speed * effectiveRetreat * speedScale
+                    moveY = -(dy / dist) * enemy.speed * effectiveRetreat * speedScale
                 }
             } else {
                 // In range: strafe (perpendicular to player direction)
                 if (dist > 0f) {
                     val perpX = -dy / dist  // Perpendicular vector
                     val perpY = dx / dist
-                    moveX = perpX * enemy.strafeDir * enemy.speed * strafeSpeed * speedScale
-                    moveY = perpY * enemy.strafeDir * enemy.speed * strafeSpeed * speedScale
+                    moveX = perpX * enemy.strafeDir * enemy.speed * effectiveStrafe * speedScale
+                    moveY = perpY * enemy.strafeDir * enemy.speed * effectiveStrafe * speedScale
                 }
             }
 
@@ -715,12 +784,12 @@ class GameEngine(
                     val sx = enemy.x - other.x
                     val sy = enemy.y - other.y
                     val sSq = sx * sx + sy * sy
-                    val sepRadiusSq = separationRadius * separationRadius
+                    val sepRadiusSq = baseSeparationRadius * baseSeparationRadius
 
                     if (sSq > 0f && sSq < sepRadiusSq) {
                         val sDist = kotlin.math.sqrt(sSq)
-                        sepX += (sx / sDist) * separationStrength * enemy.speed * speedScale
-                        sepY += (sy / sDist) * separationStrength * enemy.speed * speedScale
+                        sepX += (sx / sDist) * effectiveSeparation * enemy.speed * speedScale
+                        sepY += (sy / sDist) * effectiveSeparation * enemy.speed * speedScale
                     }
                     checksLeft--
                 }
@@ -753,15 +822,25 @@ class GameEngine(
                     vx = 0f
                     vy = bulletSpeed
                 } else {
-                    // Phase 4 AI: Lead aiming (predict player position)
+                    // Phase 4+5 AI: Lead aiming (predict player position, scaled by size-tier)
                     val playerSpeedSq = player.velocityX * player.velocityX + player.velocityY * player.velocityY
-                    val leadT = if (playerSpeedSq > 1f) {
+                    val baseLead = if (playerSpeedSq > 1f) {
                         // Player moving: use lead time
-                        0.25f.coerceIn(0.15f, 0.35f)
+                        0.25f
                     } else {
                         // Player slow/stationary: direct aim
                         0f
                     }
+
+                    // Phase 5: Size-tier accuracy modifier
+                    val tierLeadMod = when (enemy.sizeTier) {
+                        SizeTier.SMALL -> 0.8f   // Less accurate
+                        SizeTier.MEDIUM -> 1.0f  // Baseline
+                        SizeTier.LARGE -> 1.2f   // More accurate
+                        SizeTier.ELITE -> 1.5f   // Best accuracy
+                    }
+
+                    val leadT = (baseLead * tierLeadMod * aggressionFactor).coerceIn(0f, 0.5f)
 
                     val aimX = player.x + player.velocityX * leadT * 60f  // 60 fps baseline
                     val aimY = player.y + player.velocityY * leadT * 60f
