@@ -111,7 +111,8 @@ data class Enemy(
     val visualStyle: EnemyVisualStyle = EnemyVisualStyle.SHAPE_CIRCLE,
     var combat: CombatStats = CombatStats(hp = 1, maxHp = 1, contactDamage = 1, invulnRemainingMs = 0L),
     var shootCooldownMs: Long = 0L,  // Enemy shooting cooldown timer
-    val strafeDir: Int = 1  // Strafe direction: 1 or -1 (deterministic, prevents sync)
+    val strafeDir: Int = 1,  // Strafe direction: 1 or -1 (deterministic, prevents sync)
+    var burstRemaining: Int = 0  // Phase 6.3: Burst fire counter (Elite enemies fire in bursts)
 )
 
 data class Player(var x: Float, var y: Float, val size: Float = 60f, var velocityX: Float = 0f, var velocityY: Float = 0f)
