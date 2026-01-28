@@ -42,5 +42,6 @@ sealed class InputEvent {
     sealed class DebugStress : InputEvent() {
         data class SetSpawnMultiplier(val multiplier: Int) : DebugStress()
         data class TriggerBurst(val count: Int) : DebugStress()
+        data object ToggleGodmode : DebugStress()
     }
 }
