@@ -47,7 +47,10 @@ data class GameState(
     val spaceCenterSprite: ImageBitmap?,
 
     // === BACKGROUND STATE ===
-    val backgroundScrollOffset: Float // From ParallaxBackgroundManager
+    val backgroundScrollOffset: Float, // From ParallaxBackgroundManager
+
+    // === INSTANT RESTART VISUAL CUE ===
+    val restartFlashAlpha: Float = 0f  // 0.0 = no flash, 1.0 = full white overlay
 ) {
     companion object {
         /**
@@ -88,7 +91,8 @@ data class GameState(
                 difficultyLevel = 0,
                 powerUpSprite = powerUpSprite,
                 spaceCenterSprite = spaceCenterSprite,
-                backgroundScrollOffset = 0f
+                backgroundScrollOffset = 0f,
+                restartFlashAlpha = 0f
             )
         }
     }

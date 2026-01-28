@@ -174,6 +174,18 @@ class GameEngine(
      * @param dtMs Delta time in milliseconds (will be real delta after Checkpoint 2)
      */
     fun update(dtMs: Long) {
+        // Handle instant restart at frame boundary (safe, atomic state transition)
+        if (restartPending) {
+            performRestart()
+            restartPending = false
+            // Continue with this frame using fresh state
+        }
+
+        // Decay restart flash (visual cue only)
+        if (restartFlashMs > 0) {
+            restartFlashMs = (restartFlashMs - dtMs).coerceAtLeast(0L)
+        }
+
         if (!isAlive) return
 
         val currentTime = System.currentTimeMillis()
@@ -365,26 +377,62 @@ class GameEngine(
     }
 
     /**
-     * Restart the game with fresh state.
+     * Perform instant restart with complete state reset.
+     * Called at frame boundary when restartPending is true.
+     * Resets ALL game state to initial values.
      */
-    fun restart() {
+    private fun performRestart() {
+        // Reset player position and velocity (reuse object pattern)
         player = Player(screenWidth / 2, screenHeight - 150f)
+
+        // Clear all entity lists
         enemies.clear()
         bullets.clear()
+        enemyBullets.clear()  // Was missing
         stars.clear()
+
+        // Clear boss and space center
+        boss = null  // Was missing
         spaceCenter = null
 
+        // Reset fixed-size pools (allocation-free, indexed iteration)
+        damagePopupHead = 0
+        var i = 0
+        while (i < DAMAGE_POPUP_CAP) {
+            damagePopups[i].remainingMs = 0L
+            i++
+        }
+        telegraphHead = 0
+        i = 0
+        while (i < TELEGRAPH_CAP) {
+            telegraphs[i].remainingMs = 0L
+            i++
+        }
+
+        // Reset score components
         score = 0
+        survivalScore = 0  // Was missing
+        killScore = 0      // Was missing
         earnedCurrency = 0
         currentMultiplier = 1.0
+
+        // Reset player state
         playerHealth = maxPlayerHealth
         isAlive = true
+        playerInvulnMs = 0L  // Was missing
 
+        // Reset timing
         gameTime = 0f
         gameStartTime = 0L
         pausedTime = 0L
         survivedMilliseconds = 0L
+        lastUpdateTime = 0L      // Was missing
+        lastFireTime = 0L        // Was missing
+        lastSpawnTime = 0L       // Was missing
+        lastPowerUpSpawnTime = 0L  // Was missing
+        lastDifficultyUpdate = 0L  // Was missing
 
+        // Reset shop state
         isShopOpen = false
         shopIndex = 0
         purchasesThisWindow = 0
@@ -393,15 +441,21 @@ class GameEngine(
         canAutoOpenShop = true
         shopItems = emptyList()
 
+        // Reset upgrades & risks
         playerUpgrades = PlayerUpgrades()
         activeRisk = null
         permanentMultiplierBonus = 0.0
         weaponStats = WeaponStats()
 
+        // Reset subsystems
         difficultyScaler.reset()
         powerUpSystem.reset()
+        backgroundManager.reset()  // Was missing
 
-        // Reinitialize stars
+        // Set restart flash for visual feedback (150ms white flash)
+        restartFlashMs = 150L
+
+        // Reinitialize stars (100 one-time allocations, acceptable)
         repeat(100) {
             stars.add(
                 Star(
@@ -415,6 +469,13 @@ class GameEngine(
         }
 
         publishSnapshot()
+    }
+
+    /**
+     * Public restart method for external callers (e.g., menu).
+     */
+    fun restart() {
+        restartPending = true
     }
 
     // === PRIVATE UPDATE METHODS ===
@@ -1490,12 +1551,18 @@ class GameEngine(
         // Phase 8: Track damage taken for adaptive difficulty
         damageTakenRecent += damageToApply
 
+        // Debug godmode: prevent death
+        if (BuildConfig.DEBUG && debugConfig.godmode && playerHealth == 0) {
+            playerHealth = 1  // Clamp to minimum 1 HP
+        }
+
         // Set invulnerability frames
         playerInvulnMs = PLAYER_IFRAMES_MS
 
-        // Check death
+        // Check death - trigger instant restart on next frame
         if (playerHealth <= 0) {
             isAlive = false
+            restartPending = true
         }
 
         if (BuildConfig.DEBUG) {
@@ -1757,7 +1824,8 @@ class GameEngine(
             difficultyLevel = difficultyScaler.getCurrentLevel(),
             powerUpSprite = powerUpSprite,
             spaceCenterSprite = spaceCenterSprite,
-            backgroundScrollOffset = 0f
+            backgroundScrollOffset = 0f,
+            restartFlashAlpha = (restartFlashMs / 150f).coerceIn(0f, 1f)
         )
     }
 
@@ -1781,6 +1849,9 @@ class GameEngine(
             is InputEvent.DebugStress.TriggerBurst -> {
                 debugConfig = debugConfig.copy(spawnBurst = event.count)
             }
+            is InputEvent.DebugStress.ToggleGodmode -> {
+                debugConfig = debugConfig.copy(godmode = !debugConfig.godmode)
+            }
         }
     }
 }
@@ -1792,5 +1863,6 @@ class GameEngine(
 data class DebugConfig(
     val enabled: Boolean = false,
     val spawnMultiplier: Int = 1,
-    val spawnBurst: Int = 0  // Consumed when > 0, then reset to 0
+    val spawnBurst: Int = 0,  // Consumed when > 0, then reset to 0
+    val godmode: Boolean = false  // Debug: player cannot die
 )
