@@ -111,7 +111,16 @@ data class Enemy(
     val visualStyle: EnemyVisualStyle = EnemyVisualStyle.SHAPE_CIRCLE,
     var combat: CombatStats = CombatStats(hp = 1, maxHp = 1, contactDamage = 1, invulnRemainingMs = 0L),
     var shootCooldownMs: Long = 0L,  // Enemy shooting cooldown timer
-    val strafeDir: Int = 1  // Strafe direction: 1 or -1 (deterministic, prevents sync)
+    val strafeDir: Int = 1,  // Strafe direction: 1 or -1 (deterministic, prevents sync)
+    var burstRemaining: Int = 0,  // Phase 6.3: Burst fire counter (Elite enemies fire in bursts)
+    // Phase 7: Formation role modifiers (assigned at spawn, zero runtime cost)
+    val formationRangeBonus: Float = 0f,  // Range offset from preferred distance
+    val formationStrafeMod: Float = 1.0f, // Strafe speed multiplier
+    val formationSepMod: Float = 1.0f,    // Separation strength multiplier
+    // Phase 8: Visual feedback state (primitives only, updated per-frame)
+    var dodgeFlashMs: Long = 0L,          // Dodge flash timer (elite dodge feedback)
+    var burstTelegraphMs: Long = 0L,      // Burst telegraph timer (pre-burst glow)
+    val formationRole: Int = 0            // Formation role ID for color tint (0-4)
 )
 
 data class Player(var x: Float, var y: Float, val size: Float = 60f, var velocityX: Float = 0f, var velocityY: Float = 0f)
@@ -2360,6 +2369,36 @@ fun DrawScope.drawEnemy(enemy: Enemy, renderer: EnemyRenderer?) {
     val size = enemy.size
     val halfSize = size / 2
 
+    // Phase 8: Visual feedback - dodge flash (bright cyan)
+    if (enemy.dodgeFlashMs > 0L) {
+        val flashAlpha = (enemy.dodgeFlashMs / 150f).coerceIn(0f, 1f)
+        drawCircle(
+            color = Color.Cyan.copy(alpha = flashAlpha * 0.6f),
+            radius = halfSize * 1.4f,
+            center = Offset(centerX, centerY)
+        )
+    }
+
+    // Phase 8: Visual feedback - burst telegraph (yellow glow)
+    if (enemy.burstTelegraphMs > 0L) {
+        val glowAlpha = (enemy.burstTelegraphMs / 300f).coerceIn(0f, 1f)
+        drawCircle(
+            color = Color.Yellow.copy(alpha = glowAlpha * 0.5f),
+            radius = halfSize * 1.3f,
+            center = Offset(centerX, centerY)
+        )
+    }
+
+    // Phase 8: Formation role color tint (subtle)
+    val baseColor = getEnemyColor(enemy.spriteVariant)
+    val roleColor = when (enemy.formationRole) {
+        0 -> baseColor.copy(red = (baseColor.red * 1.2f).coerceAtMost(1f))  // Vanguard: slight red tint
+        1, 2 -> baseColor.copy(green = (baseColor.green * 1.1f).coerceAtMost(1f))  // Flanker: slight green tint
+        3 -> baseColor.copy(blue = (baseColor.blue * 1.15f).coerceAtMost(1f))  // Support: slight blue tint
+        4 -> baseColor.copy(red = (baseColor.red * 1.1f).coerceAtMost(1f), blue = (baseColor.blue * 1.1f).coerceAtMost(1f))  // Sniper: slight purple tint
+        else -> baseColor
+    }
+
     when (enemy.visualStyle) {
         EnemyVisualStyle.SHAPE_TRIANGLE -> {
             // Draw triangle pointing down
@@ -2371,7 +2410,7 @@ fun DrawScope.drawEnemy(enemy: Enemy, renderer: EnemyRenderer?) {
             }
             drawPath(
                 path = path,
-                color = getEnemyColor(enemy.spriteVariant)
+                color = roleColor  // Phase 8: Use formation role color
             )
             // Optional thin outline
             drawPath(
@@ -2384,7 +2423,7 @@ fun DrawScope.drawEnemy(enemy: Enemy, renderer: EnemyRenderer?) {
         EnemyVisualStyle.SHAPE_SQUARE -> {
             // Draw square
             drawRect(
-                color = getEnemyColor(enemy.spriteVariant),
+                color = roleColor,  // Phase 8: Use formation role color
                 topLeft = Offset(centerX - halfSize, centerY - halfSize),
                 size = Size(size, size)
             )
@@ -2402,7 +2441,7 @@ fun DrawScope.drawEnemy(enemy: Enemy, renderer: EnemyRenderer?) {
             val width = size * 1.4f
             val height = size * 0.7f
             drawRect(
-                color = getEnemyColor(enemy.spriteVariant),
+                color = roleColor,  // Phase 8: Use formation role color
                 topLeft = Offset(centerX - width / 2, centerY - height / 2),
                 size = Size(width, height)
             )
@@ -2418,7 +2457,7 @@ fun DrawScope.drawEnemy(enemy: Enemy, renderer: EnemyRenderer?) {
         EnemyVisualStyle.SHAPE_CIRCLE -> {
             // Draw circle
             drawCircle(
-                color = getEnemyColor(enemy.spriteVariant),
+                color = roleColor,  // Phase 8: Use formation role color
                 radius = halfSize,
                 center = Offset(centerX, centerY)
             )
