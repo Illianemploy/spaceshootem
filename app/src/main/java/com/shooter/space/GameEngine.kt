@@ -553,6 +553,40 @@ class GameEngine(
         val spawnX = randFloat(size, screenWidth - size)
         val strafeDir = if ((spawnX.toInt() + enemies.size) % 2 == 0) 1 else -1  // Deterministic strafe direction
 
+        // Phase 7: Formation role assignment (5 roles, deterministic by spawn index)
+        val spawnIndex = enemies.size
+        val formationRole = spawnIndex % 5  // 0=vanguard, 1=flanker-L, 2=flanker-R, 3=support, 4=sniper
+
+        val roleRangeBonus: Float
+        val roleStrafeMod: Float
+        val roleSepMod: Float
+        when (formationRole) {
+            0 -> {
+                // VANGUARD: Close range, normal strafe, tight formation
+                roleRangeBonus = -50f
+                roleStrafeMod = 1.0f
+                roleSepMod = 0.8f
+            }
+            1, 2 -> {
+                // FLANKER-L/R: Normal range, fast strafe, normal separation
+                roleRangeBonus = 0f
+                roleStrafeMod = 1.3f
+                roleSepMod = 1.0f
+            }
+            3 -> {
+                // SUPPORT: Mid-far range, slow strafe, spread out
+                roleRangeBonus = +40f
+                roleStrafeMod = 0.7f
+                roleSepMod = 1.2f
+            }
+            else -> {
+                // SNIPER: Far range, minimal strafe, very spread out
+                roleRangeBonus = +100f
+                roleStrafeMod = 0.3f
+                roleSepMod = 1.5f
+            }
+        }
+
         val enemy = Enemy(
             x = spawnX,
             y = -size,
@@ -572,7 +606,11 @@ class GameEngine(
                 invulnRemainingMs = 0L
             ),
             shootCooldownMs = initialCooldown,
-            strafeDir = strafeDir
+            strafeDir = strafeDir,
+            burstRemaining = 0,
+            formationRangeBonus = roleRangeBonus,
+            formationStrafeMod = roleStrafeMod,
+            formationSepMod = roleSepMod
         )
 
         enemies.add(enemy)
@@ -734,12 +772,13 @@ class GameEngine(
                 }
             }
 
-            // Compute effective parameters (combine size-tier + difficulty + state)
-            val effectiveRange = (baseRangePx + rangeOffset) * stateMod / aggressionFactor
+            // Compute effective parameters (combine size-tier + difficulty + state + formation role)
+            // Phase 7: Formation role modifiers applied here (assigned at spawn, zero runtime cost)
+            val effectiveRange = (baseRangePx + rangeOffset + enemy.formationRangeBonus) * stateMod / aggressionFactor
             val effectiveApproach = baseApproachSpeed * aggressionFactor
             val effectiveRetreat = baseRetreatSpeed
-            val effectiveStrafe = (baseStrafeSpeed + strafeMod) * strafeStateMod
-            val effectiveSeparation = baseSeparationStrength * sepMod
+            val effectiveStrafe = (baseStrafeSpeed + strafeMod) * strafeStateMod * enemy.formationStrafeMod
+            val effectiveSeparation = baseSeparationStrength * sepMod * enemy.formationSepMod
 
             // Phase 4 AI: Preferred range + strafe movement
             val dx = player.x - enemy.x
@@ -796,6 +835,45 @@ class GameEngine(
                 j++
             }
 
+            // Phase 6.1: Bullet dodging (Elite and Large only - reactive evasion)
+            var dodgeX = 0f
+            var dodgeY = 0f
+            if (enemy.sizeTier == SizeTier.ELITE || enemy.sizeTier == SizeTier.LARGE) {
+                val dodgeChecks = if (enemy.sizeTier == SizeTier.ELITE) 6 else 4  // Elite checks more bullets
+                val dangerRadiusSq = if (enemy.sizeTier == SizeTier.ELITE) 18000f else 12000f  // Elite = 134px, Large = 110px
+
+                var checksRemaining = dodgeChecks
+                var k = 0
+                while (k < bullets.size && checksRemaining > 0) {
+                    val b = bullets[k]
+                    val bdx = b.x - enemy.x
+                    val bdy = enemy.y - b.y  // Bullet moving down (+y), check if approaching
+                    val distSq = bdx * bdx + bdy * bdy
+
+                    // Danger zone: bullet within range and moving toward enemy (bdy > 0 means bullet below enemy, approaching)
+                    if (distSq < dangerRadiusSq && bdy > 0f) {
+                        val bDist = kotlin.math.sqrt(distSq)
+                        if (bDist > 0f) {
+                            // Dodge perpendicular to bullet's approach vector
+                            val dodgeDirX = -bdy / bDist * enemy.strafeDir  // Perpendicular direction
+                            val dodgeDirY = bdx / bDist * 0.5f  // Slight retreat component
+
+                            val dodgeStrength = if (enemy.sizeTier == SizeTier.ELITE) 0.6f else 0.4f
+                            dodgeX += dodgeDirX * dodgeStrength
+                            dodgeY += dodgeDirY * dodgeStrength
+                        }
+                        checksRemaining--
+                    }
+                    k++
+                }
+
+                // Apply dodge force
+                if (dodgeX != 0f || dodgeY != 0f) {
+                    moveX += dodgeX * enemy.speed * speedScale
+                    moveY += dodgeY * enemy.speed * speedScale
+                }
+            }
+
             // Apply combined movement
             enemy.x += moveX + sepX
             enemy.y += moveY + sepY
@@ -807,17 +885,60 @@ class GameEngine(
             enemy.shootCooldownMs = (enemy.shootCooldownMs - dtMs).coerceAtLeast(0L)
 
             if (enemy.shootCooldownMs == 0L && enemy.y >= 0f && enemy.y <= screenHeight && enemyBullets.size < MAX_ENEMY_BULLETS) {
-                // Spawn enemy bullet (respects cap)
-                val bulletSpeed = 12f
-                val bulletDamage = 1
-                val bulletRadius = 6f
-                val spawnX = enemy.x
-                val spawnY = enemy.y + enemy.size * 0.5f
+                // Phase 6.2: Shooting discipline - check for clear shot (Elite and Large only)
+                var clearShot = true
+                if (enemy.sizeTier == SizeTier.ELITE || enemy.sizeTier == SizeTier.LARGE) {
+                    val aimDx = player.x - enemy.x
+                    val aimDy = player.y - enemy.y
+                    val aimDistSq = aimDx * aimDx + aimDy * aimDy
 
-                val vx: Float
-                val vy: Float
+                    if (aimDistSq > 0f) {
+                        val allyChecks = if (enemy.sizeTier == SizeTier.ELITE) 5 else 3
+                        var allyChecksRemaining = allyChecks
+                        var m = 0
+                        while (m < enemies.size && allyChecksRemaining > 0 && clearShot) {
+                            if (m != i) {
+                                val ally = enemies[m]
+                                val allyDx = ally.x - enemy.x
+                                val allyDy = ally.y - enemy.y
 
-                if (enemy.type <= 2) {
+                                // Check if ally is between enemy and player
+                                val dotProduct = allyDx * aimDx + allyDy * aimDy
+
+                                // Ally must be in front (positive dot) and closer than target
+                                if (dotProduct > 0f) {
+                                    val allyDistSq = allyDx * allyDx + allyDy * allyDy
+
+                                    if (allyDistSq < aimDistSq * 0.85f) {  // Ally is 85% or closer to target distance
+                                        // Check if ally is within firing cone (~35° for Elite, ~45° for Large)
+                                        val cosThreshold = if (enemy.sizeTier == SizeTier.ELITE) 0.819f else 0.707f  // cos(35°) vs cos(45°)
+                                        val dotNormalized = dotProduct / kotlin.math.sqrt(allyDistSq * aimDistSq)
+
+                                        if (dotNormalized > cosThreshold) {
+                                            clearShot = false  // Ally in the way, hold fire
+                                        }
+                                    }
+                                }
+                                allyChecksRemaining--
+                            }
+                            m++
+                        }
+                    }
+                }
+
+                // Only shoot if clear shot (always true for Small/Medium)
+                if (clearShot) {
+                    // Spawn enemy bullet (respects cap)
+                    val bulletSpeed = 12f
+                    val bulletDamage = 1
+                    val bulletRadius = 6f
+                    val spawnX = enemy.x
+                    val spawnY = enemy.y + enemy.size * 0.5f
+
+                    val vx: Float
+                    val vy: Float
+
+                    if (enemy.type <= 2) {
                     // STRAIGHT_DOWN (no lead)
                     vx = 0f
                     vy = bulletSpeed
@@ -868,16 +989,36 @@ class GameEngine(
                     )
                 )
 
-                // Reset cooldown
-                enemy.shootCooldownMs = if (enemy.type <= 2) {
-                    Random.nextLong(900L, 1401L)
-                } else {
-                    Random.nextLong(600L, 1101L)
-                }
+                    // Phase 6.3: Burst fire for Elite enemies (3-shot bursts)
+                    if (enemy.sizeTier == SizeTier.ELITE && enemy.type > 2) {
+                        if (enemy.burstRemaining == 0) {
+                            // Start new burst (fire 3 shots total)
+                            enemy.burstRemaining = 2  // 2 more shots after this one
+                            enemy.shootCooldownMs = 150L  // 150ms between burst shots
+                        } else {
+                            // Continue burst
+                            enemy.burstRemaining--
+                            if (enemy.burstRemaining > 0) {
+                                enemy.shootCooldownMs = 150L  // Next shot in burst
+                            } else {
+                                // Burst complete, long cooldown
+                                enemy.shootCooldownMs = Random.nextLong(1200L, 1801L)
+                            }
+                        }
+                    } else {
+                        // Normal cooldown for non-elite
+                        enemy.shootCooldownMs = if (enemy.type <= 2) {
+                            Random.nextLong(900L, 1401L)
+                        } else {
+                            Random.nextLong(600L, 1101L)
+                        }
+                    }
 
-                if (BuildConfig.DEBUG) {
-                    android.util.Log.d("Combat", "Enemy type ${enemy.type} fired bullet at (${spawnX.toInt()}, ${spawnY.toInt()}) with lead=${if (enemy.type > 2) "ON" else "OFF"}")
-                }
+                    if (BuildConfig.DEBUG) {
+                        val burstInfo = if (enemy.sizeTier == SizeTier.ELITE && enemy.burstRemaining > 0) " [BURST:${3 - enemy.burstRemaining}/3]" else ""
+                        android.util.Log.d("Combat", "Enemy type ${enemy.type} fired bullet at (${spawnX.toInt()}, ${spawnY.toInt()}) with lead=${if (enemy.type > 2) "ON" else "OFF"}$burstInfo")
+                    }
+                }  // End clearShot check
             }
 
             i++
