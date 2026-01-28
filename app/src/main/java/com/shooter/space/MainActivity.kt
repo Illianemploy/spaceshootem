@@ -1975,8 +1975,21 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                     .padding(8.dp)
             )
 
-            // Debug stress test controls (bottom-right)
+            // Godmode indicator (top-center)
             val debugConfig = gameEngine.getDebugConfig()
+            if (debugConfig.godmode) {
+                Text(
+                    text = "⚠️ GODMODE: ON",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.Red,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 80.dp)
+                )
+            }
+
+            // Debug stress test controls (bottom-right)
             Card(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -2045,6 +2058,25 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                             text = "+25 BURST",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Godmode toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Godmode", color = Color.White, fontSize = 14.sp)
+                        Switch(
+                            checked = debugConfig.godmode,
+                            onCheckedChange = {
+                                gameEngine.handleDebugStress(InputEvent.DebugStress.ToggleGodmode)
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.Red,
+                                checkedTrackColor = Color.Red.copy(alpha = 0.5f)
+                            )
                         )
                     }
 

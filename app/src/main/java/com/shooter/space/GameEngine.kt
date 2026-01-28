@@ -1490,6 +1490,11 @@ class GameEngine(
         // Phase 8: Track damage taken for adaptive difficulty
         damageTakenRecent += damageToApply
 
+        // Debug godmode: prevent death
+        if (BuildConfig.DEBUG && debugConfig.godmode && playerHealth == 0) {
+            playerHealth = 1  // Clamp to minimum 1 HP
+        }
+
         // Set invulnerability frames
         playerInvulnMs = PLAYER_IFRAMES_MS
 
@@ -1781,6 +1786,9 @@ class GameEngine(
             is InputEvent.DebugStress.TriggerBurst -> {
                 debugConfig = debugConfig.copy(spawnBurst = event.count)
             }
+            is InputEvent.DebugStress.ToggleGodmode -> {
+                debugConfig = debugConfig.copy(godmode = !debugConfig.godmode)
+            }
         }
     }
 }
@@ -1792,5 +1800,6 @@ class GameEngine(
 data class DebugConfig(
     val enabled: Boolean = false,
     val spawnMultiplier: Int = 1,
-    val spawnBurst: Int = 0  // Consumed when > 0, then reset to 0
+    val spawnBurst: Int = 0,  // Consumed when > 0, then reset to 0
+    val godmode: Boolean = false  // Debug: player cannot die
 )
