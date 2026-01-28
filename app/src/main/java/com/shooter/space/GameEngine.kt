@@ -127,6 +127,14 @@ class GameEngine(
     // Combat state
     private var playerInvulnMs = 0L  // Player invulnerability timer
 
+    // Phase 8: Adaptive difficulty (track player performance)
+    private var shotsFired = 0
+    private var shotsHit = 0
+    private var damageTakenRecent = 0
+    private var performanceWindowMs = 0L  // Rolling window timer
+    private val PERFORMANCE_WINDOW_DURATION = 10000L  // 10 second window
+    private var adaptiveDifficultyMod = 1.0f  // Multiplier applied to aggression (0.7-1.3)
+
     // === PUBLISHED STATE (primitives only, NO entity copying) ===
     val state = mutableStateOf(
         GameState.initial(powerUpSprite, spaceCenterSprite)
@@ -190,6 +198,9 @@ class GameEngine(
         }
 
         // === ACTIVE GAME UPDATES (only when shop closed) ===
+
+        // Phase 8: Update adaptive difficulty based on player performance
+        updateAdaptiveDifficulty(dtMs)
 
         // Update multiplier
         currentMultiplier = calculateMultiplier(survivedMilliseconds) +
@@ -510,6 +521,9 @@ class GameEngine(
                 i++
             }
 
+            // Phase 8: Track shots fired for adaptive difficulty
+            shotsFired += projectileCount
+
             lastFireTime = currentTime
         }
     }
@@ -610,7 +624,10 @@ class GameEngine(
             burstRemaining = 0,
             formationRangeBonus = roleRangeBonus,
             formationStrafeMod = roleStrafeMod,
-            formationSepMod = roleSepMod
+            formationSepMod = roleSepMod,
+            dodgeFlashMs = 0L,
+            burstTelegraphMs = 0L,
+            formationRole = formationRole
         )
 
         enemies.add(enemy)
@@ -693,15 +710,22 @@ class GameEngine(
         val baseSeparationRadius = 80f
         val baseSeparationStrength = 0.2f
 
-        // Phase 5: Difficulty scaling (enemies get more aggressive at higher difficulty)
+        // Phase 5+8: Difficulty scaling (base difficulty + adaptive player skill adjustment)
         val diffLevel = difficultyScaler.getCurrentLevel()
-        val aggressionFactor = (1.0f + diffLevel * 0.03f).coerceAtMost(1.4f)
+        val baseFactor = (1.0f + diffLevel * 0.03f).coerceAtMost(1.4f)
+        val aggressionFactor = baseFactor * adaptiveDifficultyMod  // Phase 8: Adaptive difficulty
 
         var i = 0
         while (i < enemies.size) {
             val enemy = enemies[i]
             enemy.timeAlive += dtSec
             enemy.rotation += 1f * (dtMs / 16f)
+
+            // Phase 8: Update visual feedback timers
+            if (enemy.dodgeFlashMs > 0L) {
+                enemy.dodgeFlashMs = (enemy.dodgeFlashMs - dtMs).coerceAtLeast(0L)
+            }
+            // Note: burstTelegraphMs is set dynamically in shooting logic below
 
             // Update behavior controller with correct combat health
             val c = enemy.combat
@@ -871,6 +895,9 @@ class GameEngine(
                 if (dodgeX != 0f || dodgeY != 0f) {
                     moveX += dodgeX * enemy.speed * speedScale
                     moveY += dodgeY * enemy.speed * speedScale
+
+                    // Phase 8: Visual feedback - flash on successful dodge
+                    enemy.dodgeFlashMs = 150L  // 150ms flash duration
                 }
             }
 
@@ -883,6 +910,17 @@ class GameEngine(
 
             // Enemy shooting logic (Phase 2 + Phase 4 lead aiming)
             enemy.shootCooldownMs = (enemy.shootCooldownMs - dtMs).coerceAtLeast(0L)
+
+            // Phase 8: Visual feedback - burst telegraph (glow 300ms before burst)
+            if (enemy.sizeTier == SizeTier.ELITE && enemy.type > 2 && enemy.burstRemaining == 0) {
+                if (enemy.shootCooldownMs > 0L && enemy.shootCooldownMs <= 300L) {
+                    enemy.burstTelegraphMs = enemy.shootCooldownMs  // Glow until firing
+                } else {
+                    enemy.burstTelegraphMs = 0L
+                }
+            } else {
+                enemy.burstTelegraphMs = 0L
+            }
 
             if (enemy.shootCooldownMs == 0L && enemy.y >= 0f && enemy.y <= screenHeight && enemyBullets.size < MAX_ENEMY_BULLETS) {
                 // Phase 6.2: Shooting discipline - check for clear shot (Elite and Large only)
@@ -1271,6 +1309,9 @@ class GameEngine(
                     // Apply damage via combat system
                     applyDamageToEnemy(enemy, 1, DamageSource.PLAYER_BULLET)
 
+                    // Phase 8: Track hits for adaptive difficulty
+                    shotsHit++
+
                     // Remove bullet (already hit)
                     bullets.removeAt(bulletIdx)
                     bulletHit = true
@@ -1446,6 +1487,9 @@ class GameEngine(
         // Apply damage
         playerHealth = (playerHealth - damageToApply).coerceAtLeast(0)
 
+        // Phase 8: Track damage taken for adaptive difficulty
+        damageTakenRecent += damageToApply
+
         // Set invulnerability frames
         playerInvulnMs = PLAYER_IFRAMES_MS
 
@@ -1614,6 +1658,66 @@ class GameEngine(
             ShopItemType.SCORE_BOOST -> playerUpgrades.scoreBoostPercent += 15.0
             ShopItemType.CURRENCY_BOOST -> playerUpgrades.currencyBoostPercent += 15.0
             else -> {} // Other types handled separately
+        }
+    }
+
+    /**
+     * Phase 8: Update adaptive difficulty based on player performance.
+     * Tracks accuracy and survivability over rolling 10-second window.
+     * Adjusts enemy aggression: skilled players face harder AI, struggling players get relief.
+     */
+    private fun updateAdaptiveDifficulty(dtMs: Long) {
+        performanceWindowMs += dtMs
+
+        // Reset performance window every 10 seconds
+        if (performanceWindowMs >= PERFORMANCE_WINDOW_DURATION) {
+            performanceWindowMs = 0L
+
+            // Calculate performance metrics
+            val accuracy = if (shotsFired > 0) {
+                shotsHit.toFloat() / shotsFired.toFloat()
+            } else {
+                0.5f  // Neutral if no shots fired
+            }
+
+            val survivability = if (damageTakenRecent <= 0) {
+                1.0f  // Perfect (no damage taken)
+            } else if (damageTakenRecent >= 5) {
+                0.0f  // Poor (heavy damage)
+            } else {
+                1.0f - (damageTakenRecent / 5.0f)  // Linear scale 0-5 damage
+            }
+
+            // Combined skill metric (weighted: 60% accuracy, 40% survivability)
+            val skillMetric = (accuracy * 0.6f) + (survivability * 0.4f)
+
+            // Map skill to difficulty modifier:
+            // 0.0-0.3: struggling → 0.7x aggression (easier)
+            // 0.3-0.7: average → 1.0x aggression (baseline)
+            // 0.7-1.0: skilled → 1.3x aggression (harder)
+            val targetMod = when {
+                skillMetric < 0.3f -> 0.7f + (skillMetric / 0.3f) * 0.3f  // 0.7-1.0x
+                skillMetric < 0.7f -> 1.0f  // 1.0x baseline
+                else -> 1.0f + ((skillMetric - 0.7f) / 0.3f) * 0.3f  // 1.0-1.3x
+            }
+
+            // Smooth transition (lerp 20% toward target each window)
+            adaptiveDifficultyMod = adaptiveDifficultyMod * 0.8f + targetMod * 0.2f
+
+            // Clamp to safe range
+            adaptiveDifficultyMod = adaptiveDifficultyMod.coerceIn(0.7f, 1.3f)
+
+            // Reset counters for next window
+            shotsFired = 0
+            shotsHit = 0
+            damageTakenRecent = 0
+
+            if (BuildConfig.DEBUG) {
+                android.util.Log.d("AdaptiveDifficulty",
+                    "Skill: %.2f | Acc: %.2f | Surv: %.2f | Mod: %.2f".format(
+                        skillMetric, accuracy, survivability, adaptiveDifficultyMod
+                    ))
+            }
         }
     }
 
