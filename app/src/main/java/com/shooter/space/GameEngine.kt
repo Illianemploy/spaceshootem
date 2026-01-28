@@ -553,6 +553,40 @@ class GameEngine(
         val spawnX = randFloat(size, screenWidth - size)
         val strafeDir = if ((spawnX.toInt() + enemies.size) % 2 == 0) 1 else -1  // Deterministic strafe direction
 
+        // Phase 7: Formation role assignment (5 roles, deterministic by spawn index)
+        val spawnIndex = enemies.size
+        val formationRole = spawnIndex % 5  // 0=vanguard, 1=flanker-L, 2=flanker-R, 3=support, 4=sniper
+
+        val roleRangeBonus: Float
+        val roleStrafeMod: Float
+        val roleSepMod: Float
+        when (formationRole) {
+            0 -> {
+                // VANGUARD: Close range, normal strafe, tight formation
+                roleRangeBonus = -50f
+                roleStrafeMod = 1.0f
+                roleSepMod = 0.8f
+            }
+            1, 2 -> {
+                // FLANKER-L/R: Normal range, fast strafe, normal separation
+                roleRangeBonus = 0f
+                roleStrafeMod = 1.3f
+                roleSepMod = 1.0f
+            }
+            3 -> {
+                // SUPPORT: Mid-far range, slow strafe, spread out
+                roleRangeBonus = +40f
+                roleStrafeMod = 0.7f
+                roleSepMod = 1.2f
+            }
+            else -> {
+                // SNIPER: Far range, minimal strafe, very spread out
+                roleRangeBonus = +100f
+                roleStrafeMod = 0.3f
+                roleSepMod = 1.5f
+            }
+        }
+
         val enemy = Enemy(
             x = spawnX,
             y = -size,
@@ -572,7 +606,11 @@ class GameEngine(
                 invulnRemainingMs = 0L
             ),
             shootCooldownMs = initialCooldown,
-            strafeDir = strafeDir
+            strafeDir = strafeDir,
+            burstRemaining = 0,
+            formationRangeBonus = roleRangeBonus,
+            formationStrafeMod = roleStrafeMod,
+            formationSepMod = roleSepMod
         )
 
         enemies.add(enemy)
@@ -734,12 +772,13 @@ class GameEngine(
                 }
             }
 
-            // Compute effective parameters (combine size-tier + difficulty + state)
-            val effectiveRange = (baseRangePx + rangeOffset) * stateMod / aggressionFactor
+            // Compute effective parameters (combine size-tier + difficulty + state + formation role)
+            // Phase 7: Formation role modifiers applied here (assigned at spawn, zero runtime cost)
+            val effectiveRange = (baseRangePx + rangeOffset + enemy.formationRangeBonus) * stateMod / aggressionFactor
             val effectiveApproach = baseApproachSpeed * aggressionFactor
             val effectiveRetreat = baseRetreatSpeed
-            val effectiveStrafe = (baseStrafeSpeed + strafeMod) * strafeStateMod
-            val effectiveSeparation = baseSeparationStrength * sepMod
+            val effectiveStrafe = (baseStrafeSpeed + strafeMod) * strafeStateMod * enemy.formationStrafeMod
+            val effectiveSeparation = baseSeparationStrength * sepMod * enemy.formationSepMod
 
             // Phase 4 AI: Preferred range + strafe movement
             val dx = player.x - enemy.x
