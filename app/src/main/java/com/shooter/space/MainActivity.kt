@@ -1452,11 +1452,12 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
     var lastCompletedSecondFrames by remember { mutableIntStateOf(0) }
 
     // Game loop - vsync-driven with withFrameNanos, continuous frame requests
-    LaunchedEffect(gameState.isAlive) {
+    // Key on Unit (not isAlive) so loop continues through instant restarts
+    LaunchedEffect(Unit) {
         var lastFrameNanos = 0L
         var lastDebugUpdate = 0L
 
-        while (isActive && gameState.isAlive) {
+        while (isActive) {
             withFrameNanos { frameTimeNanos ->
                 // Calculate delta time from last frame
                 val dtNanos = if (lastFrameNanos > 0L) frameTimeNanos - lastFrameNanos else 16_000_000L
@@ -1536,11 +1537,7 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
                 }
             }
         }
-
-        if (!gameState.isAlive) {
-            delay(2000)
-            onGameOver(gameState.score, gameState.earnedCurrency)
-        }
+        // Instant restart: no delay, no onGameOver - game continues via restartPending flag
     }
 
     // Cached Paint objects for damage popups (allocation-free rendering)
@@ -1833,6 +1830,15 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
             }
         }
 
+        // Restart flash overlay (visual cue for instant restart)
+        if (gameState.restartFlashAlpha > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.White.copy(alpha = gameState.restartFlashAlpha * 0.7f))
+            )
+        }
+
         // Score and Currency UI (Top)
         Column(
             modifier = Modifier
@@ -1909,15 +1915,7 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
             )
         }
 
-        if (!gameState.isAlive) {
-            Text(
-                text = "GAME OVER",
-                fontSize = 48.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.Red,
-                modifier = Modifier.align(Alignment.Center)
-            )
-        }
+        // Instant restart: no GAME OVER screen - game restarts immediately on death
 
         // Debug overlay (only in debug builds)
         if (BuildConfig.DEBUG && debugOverlayEnabled) {
