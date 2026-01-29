@@ -131,6 +131,9 @@ class GameEngine(
     private var restartPending = false
     private var restartFlashMs = 0L  // Visual feedback timer (decays to 0)
 
+    // Lifecycle pause state (prevents updates when app backgrounded)
+    private var isPaused = false
+
     // Phase 8: Adaptive difficulty (track player performance)
     private var shotsFired = 0
     private var shotsHit = 0
@@ -178,6 +181,9 @@ class GameEngine(
      * @param dtMs Delta time in milliseconds (will be real delta after Checkpoint 2)
      */
     fun update(dtMs: Long) {
+        // Skip updates when app is paused (backgrounded)
+        if (isPaused) return
+
         // Handle instant restart at frame boundary (safe, atomic state transition)
         if (restartPending) {
             performRestart()
@@ -487,6 +493,24 @@ class GameEngine(
      */
     fun restart() {
         restartPending = true
+    }
+
+    /**
+     * Pause game updates (called when app goes to background).
+     * Prevents crashes from updates running while Activity is stopped.
+     */
+    fun pause() {
+        isPaused = true
+    }
+
+    /**
+     * Resume game updates (called when app returns to foreground).
+     * Resets frame timing to avoid large delta-time spikes.
+     */
+    fun resume() {
+        isPaused = false
+        // Reset timing to avoid spiral-of-death from accumulated pause time
+        lastUpdateTime = System.currentTimeMillis()
     }
 
     // === PRIVATE UPDATE METHODS ===

@@ -33,9 +33,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlin.math.abs
@@ -1431,6 +1434,22 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
         )
     }
 
+    // Lifecycle handling: pause/resume game when app goes to background/foreground
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> gameEngine.pause()
+                Lifecycle.Event.ON_RESUME -> gameEngine.resume()
+                else -> { /* ignore other events */ }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     // Observe game state for rendering
     val gameState by gameEngine.state
 
@@ -1633,10 +1652,24 @@ fun GameScreen(onGameOver: (Int, Int) -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        gameEngine.handlePlayerDrag(dragAmount.x, dragAmount.y)
-                    }
+                    // Edge exclusion zone (40dp) to avoid conflicts with system gesture navigation
+                    val edgeExclusionPx = 40.dp.toPx()
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            // Ignore drags that start in edge zones (system gesture areas)
+                            if (offset.x < edgeExclusionPx || offset.x > size.width - edgeExclusionPx) {
+                                // Don't start drag - let system handle edge gestures
+                            }
+                        },
+                        onDrag = { change, dragAmount ->
+                            // Only process drag if not in edge zone
+                            val pos = change.position
+                            if (pos.x >= edgeExclusionPx && pos.x <= size.width - edgeExclusionPx) {
+                                change.consume()
+                                gameEngine.handlePlayerDrag(dragAmount.x, dragAmount.y)
+                            }
+                        }
+                    )
                 }
                 .pointerInput(BuildConfig.DEBUG) {
                     // Debug overlay toggle: 5 quick taps in top-right corner (only in debug builds)
