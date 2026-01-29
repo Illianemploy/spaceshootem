@@ -127,6 +127,10 @@ class GameEngine(
     // Combat state
     private var playerInvulnMs = 0L  // Player invulnerability timer
 
+    // Instant restart state
+    private var restartPending = false
+    private var restartFlashMs = 0L  // Visual feedback timer (decays to 0)
+
     // Phase 8: Adaptive difficulty (track player performance)
     private var shotsFired = 0
     private var shotsHit = 0
