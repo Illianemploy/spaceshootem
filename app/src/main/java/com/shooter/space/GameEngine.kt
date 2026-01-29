@@ -456,6 +456,13 @@ class GameEngine(
         powerUpSystem.reset()
         backgroundManager.reset()  // Was missing
 
+        // Reset Phase 8 adaptive difficulty
+        shotsFired = 0
+        shotsHit = 0
+        damageTakenRecent = 0
+        performanceWindowMs = 0L
+        adaptiveDifficultyMod = 1.0f
+
         // Set restart flash for visual feedback (150ms white flash)
         restartFlashMs = 150L
 
